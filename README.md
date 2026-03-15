@@ -19,8 +19,4 @@ LexGraph Nexus uses AI and graph databases to help legal teams quickly identify 
 
 **Backend:** Python, LangChain, Neo4j AuraDB, FastAPI  
 **Frontend:** React, Tailwind CSS, React Force Graph  
-**AI/ML:** OpenAI GPT-4o-mini / Google Gemini 1.5 Flash, text-embedding-3-small  
-
-## 👤 Author
-
-Built as a resume portfolio project demonstrating full-stack development with AI integration.
+**AI/ML:** OpenAI GPT-4o-mini / Google Gemini 1.5 Flash, text-embedding-3-small
