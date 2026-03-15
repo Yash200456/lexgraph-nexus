@@ -26,11 +26,14 @@ def extract_text_from_pdf(pdf_path: str) -> Dict[str, any]:
     # Open PDF
     doc = pymupdf.open(pdf_path)
     
+    # Save page count BEFORE closing document
+    total_pages = len(doc)
+    
     # Extract text from all pages
     full_text = ""
     pages_data = []
     
-    for page_num in range(len(doc)):
+    for page_num in range(total_pages):
         page = doc[page_num]
         page_text = page.get_text()
         
@@ -50,7 +53,7 @@ def extract_text_from_pdf(pdf_path: str) -> Dict[str, any]:
     return {
         "filename": pdf_path.name,
         "full_text": full_text.strip(),
-        "total_pages": len(doc),
+        "total_pages": total_pages,
         "pages": pages_data,
         "total_chars": len(full_text)
     }
@@ -116,3 +119,5 @@ if __name__ == "__main__":
         
     except FileNotFoundError:
         print("⚠️ No test PDF found. Add a PDF to data/raw/sample_contract.pdf")
+    except Exception as e:
+        print(f"❌ Error: {e}")
