@@ -1,30 +1,35 @@
 """
 AI Entity Extraction Module
-Uses Gemini to extract legal entities and relationships from text chunks
+Uses Gemini API with proper rate limiting for free tier
 """
 
-from google import genai
-from google.genai import types
+import requests
 import json
 import os
 from pathlib import Path
 from typing import List, Dict
 from dotenv import load_dotenv
+import time
 
 # Load environment variables
 load_dotenv()
 
-# Configure Gemini client
-client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+
+# Free tier rate limit: 10 requests per minute
+REQUESTS_PER_MINUTE = 10
+RATE_LIMIT_DELAY = 60  # seconds
 
 
-def extract_entities_from_chunk(chunk_text: str, chunk_id: str) -> Dict:
+def extract_entities_from_chunk(chunk_text: str, chunk_id: str, max_retries: int = 3) -> Dict:
     """
     Extract legal entities and relationships from a text chunk using Gemini.
     
     Args:
         chunk_text: The text to analyze
         chunk_id: Identifier for this chunk
+        max_retries: Maximum number of retry attempts
         
     Returns:
         Dictionary containing nodes (entities) and edges (relationships)
@@ -58,45 +63,86 @@ RULES:
 - Return ONLY the JSON, nothing else
 """
     
-    try:
-        # Call Gemini API with new SDK
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt
-        )
-        
-        # Parse the response
-        response_text = response.text.strip()
-        
-        # Remove markdown code blocks if present
-        if response_text.startswith('```'):
-            response_text = response_text.split('```')[1]
-            if response_text.startswith('json'):
-                response_text = response_text[4:]
-        
-        # Parse JSON
-        data = json.loads(response_text)
-        
-        # Add chunk_id to metadata
-        data['chunk_id'] = chunk_id
-        data['success'] = True
-        
-        return data
-        
-    except Exception as e:
-        print(f"❌ Error processing chunk {chunk_id}: {e}")
-        return {
-            "chunk_id": chunk_id,
-            "nodes": [],
-            "edges": [],
-            "success": False,
-            "error": str(e)
-        }
+    # Retry logic
+    for attempt in range(max_retries):
+        try:
+            # Prepare request payload
+            payload = {
+                "contents": [{
+                    "parts": [{
+                        "text": prompt
+                    }]
+                }]
+            }
+            
+            # Call Gemini API
+            response = requests.post(
+                GEMINI_API_URL,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=30
+            )
+            
+            # Handle rate limiting
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = 60  # Wait full minute on rate limit
+                    print(f"⏸️ Rate limit, waiting {wait_time}s...", end=" ", flush=True)
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception("Rate limit exceeded after retries")
+            
+            # Handle high demand
+            if response.status_code == 503:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"⏸️ High demand, waiting {wait_time}s...", end=" ", flush=True)
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception("Model overloaded after retries")
+            
+            if response.status_code != 200:
+                raise Exception(f"API returned {response.status_code}: {response.text}")
+            
+            # Parse response
+            result = response.json()
+            response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+            
+            # Remove markdown code blocks if present
+            if response_text.startswith('```'):
+                response_text = response_text.split('```')[1]
+                if response_text.startswith('json'):
+                    response_text = response_text[4:]
+                response_text = response_text.rsplit('```', 1)[0]
+            
+            # Parse JSON
+            data = json.loads(response_text)
+            
+            # Add chunk_id to metadata
+            data['chunk_id'] = chunk_id
+            data['success'] = True
+            
+            return data
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"Error: {e}")
+                return {
+                    "chunk_id": chunk_id,
+                    "nodes": [],
+                    "edges": [],
+                    "success": False,
+                    "error": str(e)
+                }
+            else:
+                time.sleep(1)
 
 
 def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> Dict:
     """
-    Process all chunks and extract entities.
+    Process all chunks and extract entities with rate limiting.
     
     Args:
         chunks_file: Path to chunks JSON file
@@ -109,6 +155,10 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
     if not chunks_file.exists():
         raise FileNotFoundError(f"Chunks file not found: {chunks_file}")
     
+    # Initial wait to ensure quota is reset
+    print("⏸️  Waiting 60 seconds to ensure API quota is fresh...\n")
+    time.sleep(60)
+    
     # Load chunks
     with open(chunks_file, 'r', encoding='utf-8') as f:
         chunks_data = json.load(f)
@@ -116,20 +166,39 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
     chunks = chunks_data['chunks']
     total_chunks = len(chunks)
     
-    print(f"🤖 Processing {total_chunks} chunks with Gemini AI...")
-    print(f"📊 This will take ~{total_chunks * 3} seconds ({total_chunks} API calls)\n")
+    # Calculate estimated time
+    batches = (total_chunks + REQUESTS_PER_MINUTE - 1) // REQUESTS_PER_MINUTE
+    estimated_minutes = batches
+    
+    print(f"🤖 Processing {total_chunks} chunks with Gemini 2.5 Flash-Lite...")
+    print(f"⏱️  Rate limit: {REQUESTS_PER_MINUTE} requests/minute")
+    print(f"📊 Estimated time: ~{estimated_minutes} minutes ({batches} batches)\n")
     
     all_extractions = []
     all_nodes = []
     all_edges = []
+    request_count = 0
+    batch_start_time = time.time()
     
     for i, chunk in enumerate(chunks, 1):
-        print(f"⏳ Processing chunk {i}/{total_chunks}...", end=" ")
+        # Rate limiting: Wait after every 10 requests
+        if request_count >= REQUESTS_PER_MINUTE:
+            elapsed = time.time() - batch_start_time
+            wait_time = max(0, RATE_LIMIT_DELAY - elapsed)
+            if wait_time > 0:
+                print(f"\n⏸️  Rate limit: Waiting {int(wait_time)}s before next batch...\n")
+                time.sleep(wait_time)
+            request_count = 0
+            batch_start_time = time.time()
+        
+        print(f"⏳ Processing chunk {i}/{total_chunks}...", end=" ", flush=True)
         
         result = extract_entities_from_chunk(
             chunk['text'],
             chunk['chunk_id']
         )
+        
+        request_count += 1
         
         if result['success']:
             all_extractions.append(result)
@@ -138,6 +207,9 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
             print(f"✅ Found {len(result['nodes'])} entities, {len(result['edges'])} relationships")
         else:
             print(f"⚠️ Failed")
+        
+        # Small delay between requests
+        time.sleep(0.5)
     
     # Combine results
     combined = {
@@ -172,7 +244,6 @@ def save_entities(entities_data: Dict, output_path: str = "data/processed/entiti
 
 # Test function
 if __name__ == "__main__":
-    import time
     
     try:
         print("🚀 Starting AI Entity Extraction...\n")
@@ -206,7 +277,7 @@ if __name__ == "__main__":
         save_entities(entities)
         
         elapsed = time.time() - start_time
-        print(f"\n⏱️ Total time: {elapsed:.1f} seconds")
+        print(f"\n⏱️ Total time: {elapsed/60:.1f} minutes")
         print(f"\n🎉 Phase 3A Complete: Entity Extraction Done!")
         
     except FileNotFoundError as e:
