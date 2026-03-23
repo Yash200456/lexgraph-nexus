@@ -1,6 +1,6 @@
 """
 AI Entity Extraction Module
-Uses Gemini API with proper rate limiting for free tier
+Uses Gemini API with proper rate limiting and incremental saving
 """
 
 import requests
@@ -143,6 +143,7 @@ RULES:
 def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> Dict:
     """
     Process all chunks and extract entities with rate limiting.
+    Saves progress after each batch to prevent data loss.
     
     Args:
         chunks_file: Path to chunks JSON file
@@ -172,7 +173,8 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
     
     print(f"🤖 Processing {total_chunks} chunks with Gemini 2.5 Flash-Lite...")
     print(f"⏱️  Rate limit: {REQUESTS_PER_MINUTE} requests/minute")
-    print(f"📊 Estimated time: ~{estimated_minutes} minutes ({batches} batches)\n")
+    print(f"📊 Estimated time: ~{estimated_minutes} minutes ({batches} batches)")
+    print(f"💾 Progress will be saved after each batch of 10 chunks\n")
     
     all_extractions = []
     all_nodes = []
@@ -183,10 +185,23 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
     for i, chunk in enumerate(chunks, 1):
         # Rate limiting: Wait after every 10 requests
         if request_count >= REQUESTS_PER_MINUTE:
+            # Save progress before waiting
+            print(f"\n💾 Saving progress... ({len(all_extractions)} chunks processed)")
+            combined = {
+                "document": chunks_data['document_name'],
+                "total_chunks_processed": len(all_extractions),
+                "total_nodes": len(all_nodes),
+                "total_edges": len(all_edges),
+                "nodes": all_nodes,
+                "edges": all_edges,
+                "raw_extractions": all_extractions
+            }
+            save_entities(combined)
+            
             elapsed = time.time() - batch_start_time
             wait_time = max(0, RATE_LIMIT_DELAY - elapsed)
             if wait_time > 0:
-                print(f"\n⏸️  Rate limit: Waiting {int(wait_time)}s before next batch...\n")
+                print(f"⏸️  Rate limit: Waiting {int(wait_time)}s before next batch...\n")
                 time.sleep(wait_time)
             request_count = 0
             batch_start_time = time.time()
@@ -211,7 +226,7 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
         # Small delay between requests
         time.sleep(0.5)
     
-    # Combine results
+    # Final save
     combined = {
         "document": chunks_data['document_name'],
         "total_chunks_processed": len(all_extractions),
@@ -239,7 +254,7 @@ def save_entities(entities_data: Dict, output_path: str = "data/processed/entiti
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(entities_data, f, indent=2, ensure_ascii=False)
     
-    print(f"\n✅ Saved entities to: {output_path}")
+    print(f"✅ Saved to: {output_path}")
 
 
 # Test function
@@ -274,6 +289,7 @@ if __name__ == "__main__":
                 print(f"  - {edge['from']} → {edge['relation']} → {edge['to']}")
         
         # Save results
+        print(f"\n💾 Final save...")
         save_entities(entities)
         
         elapsed = time.time() - start_time
