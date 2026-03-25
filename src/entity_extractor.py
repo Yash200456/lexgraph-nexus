@@ -140,25 +140,25 @@ RULES:
                 time.sleep(1)
 
 
-def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> Dict:
+def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json", entities_file: str = "data/processed/entities.json", resume: bool = True) -> Dict:
     """
     Process all chunks and extract entities with rate limiting.
     Saves progress after each batch to prevent data loss.
+    Supports resuming from interruption.
     
     Args:
         chunks_file: Path to chunks JSON file
+        entities_file: Path to entities JSON file (for resume)
+        resume: If True, skip already-processed chunks
         
     Returns:
         Combined extraction results
     """
     chunks_file = Path(chunks_file)
+    entities_file = Path(entities_file)
     
     if not chunks_file.exists():
         raise FileNotFoundError(f"Chunks file not found: {chunks_file}")
-    
-    # Initial wait to ensure quota is reset
-    print("⏸️  Waiting 60 seconds to ensure API quota is fresh...\n")
-    time.sleep(60)
     
     # Load chunks
     with open(chunks_file, 'r', encoding='utf-8') as f:
@@ -167,64 +167,121 @@ def extract_from_all_chunks(chunks_file: str = "data/processed/chunks.json") -> 
     chunks = chunks_data['chunks']
     total_chunks = len(chunks)
     
-    # Calculate estimated time
-    batches = (total_chunks + REQUESTS_PER_MINUTE - 1) // REQUESTS_PER_MINUTE
+    # Check for resume
+    all_extractions = []
+    all_nodes = []
+    all_edges = []
+    already_processed = set()
+    start_index = 0
+    
+    if resume and entities_file.exists():
+        try:
+            with open(entities_file, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+            
+            all_extractions = existing_data.get('raw_extractions', [])
+            all_nodes = existing_data.get('nodes', [])
+            all_edges = existing_data.get('edges', [])
+            
+            # Track which chunks are already processed
+            already_processed = set(e['chunk_id'] for e in all_extractions if 'chunk_id' in e)
+            start_index = len(all_extractions)
+            
+            if start_index > 0:
+                print(f"📂 Resuming from chunk {start_index + 1}/{total_chunks} (skipping {start_index} already processed)\n")
+        except Exception as e:
+            print(f"⚠️ Could not load existing progress: {e}\n")
+            all_extractions = []
+            all_nodes = []
+            all_edges = []
+            already_processed = set()
+            start_index = 0
+    
+    # Initial wait to ensure quota is reset
+    if start_index == 0:
+        print("⏸️  Waiting 60 seconds to ensure API quota is fresh...\n")
+        time.sleep(60)
+    
+    # Calculate estimated time for remaining chunks
+    remaining_chunks = total_chunks - start_index
+    batches = (remaining_chunks + REQUESTS_PER_MINUTE - 1) // REQUESTS_PER_MINUTE
     estimated_minutes = batches
     
     print(f"🤖 Processing {total_chunks} chunks with Gemini 2.5 Flash-Lite...")
     print(f"⏱️  Rate limit: {REQUESTS_PER_MINUTE} requests/minute")
-    print(f"📊 Estimated time: ~{estimated_minutes} minutes ({batches} batches)")
+    print(f"📊 Remaining: {remaining_chunks} chunks (~{estimated_minutes} minutes in {batches} batches)")
     print(f"💾 Progress will be saved after each batch of 10 chunks\n")
     
-    all_extractions = []
-    all_nodes = []
-    all_edges = []
-    request_count = 0
+    request_count = (start_index % REQUESTS_PER_MINUTE)  # Resume count tracking
     batch_start_time = time.time()
     
-    for i, chunk in enumerate(chunks, 1):
-        # Rate limiting: Wait after every 10 requests
-        if request_count >= REQUESTS_PER_MINUTE:
-            # Save progress before waiting
-            print(f"\n💾 Saving progress... ({len(all_extractions)} chunks processed)")
-            combined = {
-                "document": chunks_data['document_name'],
-                "total_chunks_processed": len(all_extractions),
-                "total_nodes": len(all_nodes),
-                "total_edges": len(all_edges),
-                "nodes": all_nodes,
-                "edges": all_edges,
-                "raw_extractions": all_extractions
-            }
-            save_entities(combined)
+    try:
+        for i, chunk in enumerate(chunks[start_index:], start_index + 1):
+            # Skip if already processed
+            if chunk['chunk_id'] in already_processed:
+                print(f"⏭️  Chunk {i}/{total_chunks}... (already processed)")
+                continue
             
-            elapsed = time.time() - batch_start_time
-            wait_time = max(0, RATE_LIMIT_DELAY - elapsed)
-            if wait_time > 0:
-                print(f"⏸️  Rate limit: Waiting {int(wait_time)}s before next batch...\n")
-                time.sleep(wait_time)
-            request_count = 0
-            batch_start_time = time.time()
-        
-        print(f"⏳ Processing chunk {i}/{total_chunks}...", end=" ", flush=True)
-        
-        result = extract_entities_from_chunk(
-            chunk['text'],
-            chunk['chunk_id']
-        )
-        
-        request_count += 1
-        
-        if result['success']:
-            all_extractions.append(result)
-            all_nodes.extend(result['nodes'])
-            all_edges.extend(result['edges'])
-            print(f"✅ Found {len(result['nodes'])} entities, {len(result['edges'])} relationships")
-        else:
-            print(f"⚠️ Failed")
-        
-        # Small delay between requests
-        time.sleep(0.5)
+            # Rate limiting: Wait after every 10 requests
+            if request_count >= REQUESTS_PER_MINUTE:
+                # Save progress before waiting
+                print(f"\n💾 Saving progress... ({len(all_extractions)} chunks processed)")
+                combined = {
+                    "document": chunks_data['document_name'],
+                    "total_chunks_processed": len(all_extractions),
+                    "total_nodes": len(all_nodes),
+                    "total_edges": len(all_edges),
+                    "nodes": all_nodes,
+                    "edges": all_edges,
+                    "raw_extractions": all_extractions
+                }
+                save_entities(combined)
+                
+                elapsed = time.time() - batch_start_time
+                wait_time = max(0, RATE_LIMIT_DELAY - elapsed)
+                if wait_time > 0:
+                    print(f"⏸️  Rate limit: Waiting {int(wait_time)}s before next batch...")
+                    print("💡 Tip: You can press Ctrl+C to stop and resume later\n")
+                    time.sleep(wait_time)
+                request_count = 0
+                batch_start_time = time.time()
+            
+            print(f"⏳ Processing chunk {i}/{total_chunks}...", end=" ", flush=True)
+            
+            result = extract_entities_from_chunk(
+                chunk['text'],
+                chunk['chunk_id']
+            )
+            
+            request_count += 1
+            
+            if result['success']:
+                all_extractions.append(result)
+                all_nodes.extend(result['nodes'])
+                all_edges.extend(result['edges'])
+                print(f"✅ Found {len(result['nodes'])} entities, {len(result['edges'])} relationships")
+            else:
+                print(f"⚠️ Failed")
+            
+            # Small delay between requests
+            time.sleep(0.5)
+    
+    except KeyboardInterrupt:
+        print("\n\n⚠️ Interrupted by user")
+        print(f"💾 Saving progress... ({len(all_extractions)} chunks processed)")
+        combined = {
+            "document": chunks_data['document_name'],
+            "total_chunks_processed": len(all_extractions),
+            "total_nodes": len(all_nodes),
+            "total_edges": len(all_edges),
+            "nodes": all_nodes,
+            "edges": all_edges,
+            "raw_extractions": all_extractions
+        }
+        save_entities(combined)
+        print(f"✅ Saved to: data/processed/entities.json")
+        print(f"\n💡 To resume: Run the same command again, it will skip the {len(all_extractions)} already-processed chunks\n")
+        raise
     
     # Final save
     combined = {
