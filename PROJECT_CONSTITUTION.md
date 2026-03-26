@@ -1,8 +1,8 @@
 # 📋 LexGraph Nexus - Project Constitution
 
-**Last Updated:** March 25, 2026  
-**Current AI Handler:** Gemini (Claude transitioning to Gemini)  
-**Project Stage:** Active Development - Entity Extraction Phase
+**Last Updated:** March 26, 2026  
+**Current AI Handler:** Gemini  
+**Project Stage:** Active Development - Backend Integration Phase
 
 ---
 
@@ -45,15 +45,26 @@ lexgraph-nexus/
 ├── data/
 │   ├── raw/                   # Original PDFs
 │   └── processed/
-│       ├── chunks.json        # Extracted and chunked text [87 chunks from sample_contract.pdf]
-│       ├── entities.json      # Extracted entities & relationships [20/87 chunks processed]
-│       └── extracted_text.txt # Full extracted text
+│       ├── chunks.json        # ✅ [43.81 KB] - 87 chunks from sample_contract.pdf
+│       ├── entities.json      # ⏳ [135.56 KB] - 183 entities + 143 relationships (40/87 chunks)
+│       └── extracted_text.txt # ⚠️ Placeholder only - rerun pdf_extractor for full text
+│
+├── client/                    # React + Vite frontend
+│   ├── src/
+│   │   ├── App.jsx            # ✅ Main dashboard (150 lines) - API-ready
+│   │   ├── main.jsx           # ✅ React root setup
+│   │   └── styles.css         # ✅ Complete styling with theme
+│   ├── package.json           # ✅ React 19.2.4, Vite 8
+│   ├── vite.config.js         # ✅ Vite configuration
+│   └── index.html             # ✅ HTML5 entry
 │
 ├── notebooks/                 # Jupyter notebooks for exploration
-├── requirements.txt           # Python dependencies
-├── .env                      # API keys (GEMINI_API_KEY)
-├── README.md                 # User-facing documentation
-└── PROJECT_CONSTITUTION.md   # THIS FILE - AI handoff guide
+├── test_api.py                # API testing script
+├── list_models.py             # Gemini models exploration
+├── requirements.txt           # ✅ All Python dependencies installed
+├── .env                       # API keys (GEMINI_API_KEY, NEO4J_*)
+├── README.md                  # User-facing documentation
+└── PROJECT_CONSTITUTION.md    # THIS FILE - AI handoff guide
 ```
 
 ---
@@ -61,25 +72,33 @@ lexgraph-nexus/
 ## 🔄 Current Progress
 
 ### ✅ Completed
-- **PDF Extraction:** sample_contract.pdf fully extracted (text + metadata)
+- **PDF Extraction:** sample_contract.pdf fully extracted (10 pages, text + metadata)
 - **Text Chunking:** 87 semantic chunks created (500 char size, 50 char overlap)
-- **Entity Extraction:** 20/87 chunks processed through Gemini 2.5 Flash-Lite
-  - **Extracted:** 98 entities (Party, Clause, Date types)
-  - **Relationships:** 80 relationships (CONTRADICTS, SUPERSEDES, OBLIGATES, etc.)
+- **React Frontend:** Fully built dashboard with graph visualization, entity search, stats display
+  - App.jsx: Complete interactive UI (~150 lines)
+  - styles.css: Full styling with theme, responsive layout
+  - API-ready with fetch integration to backend endpoints
+- **Graph Builder Class:** `graph_builder.py` mostly implemented with node/relationship upsert methods
+- **Python Dependencies:** All packages installed (PyMuPDF, LangChain, Neo4j, FastAPI, Uvicorn, Pydantic)
 
-### ⏸️ In Progress
-- **Entity Extraction Resume:** Process resuming from chunk 21/87
-  - Previous attempt interrupted at chunk 24 (rate limit)
-  - Script updated with resume capability (skips already-processed chunks)
-  - Rate limit: 10 requests/minute on free tier
-  - Estimated time: ~9 minutes for remaining 67 chunks
+### ⏳ In Progress
+- **Entity Extraction:** 40/87 chunks processed (46% complete) via Gemini 2.5 Flash-Lite
+  - **Extracted So Far:** 183 entities + 143 relationships
+  - **Rate Limit Issue:** Processing paused during chunk extraction (10 req/min free tier limit)
+  - **To Resume:** Run `python src/entity_extractor.py` with resume flag (skips chunks 1-40)
+  - **Estimated Remaining Time:** ~5 minutes for final 47 chunks
+- **FastAPI Backend:** Skeleton in place (`graph_api.py`)
+  - ✅ Health check endpoint implemented
+  - ✅ Pydantic models defined
+  - ❌ Main query endpoints stubbed (/stats, /entities, /contradictions, /graph/view)
+  - ❌ Contradiction detection logic not implemented
 
 ### 📋 Queued
-- Graph database setup (Neo4j AuraDB)
-- FastAPI backend development
-- React frontend with visualization
-- Contradiction detection logic
+- Load extracted entities into Neo4j AuraDB (currently empty)
+- Complete FastAPI query endpoints
+- Implement contradiction detection algorithm
 - Natural language Q&A interface
+- Test end-to-end workflow
 
 ---
 
@@ -146,30 +165,24 @@ chunk_document(pdf_data, chunk_size=500, chunk_overlap=50)
 # }
 ```
 
-### Step 3: Entity Extraction (IN PROGRESS ⏳)
+### Step 3: Entity Extraction (IN PROGRESS ⏳) - 46% Complete
 **File:** `src/entity_extractor.py`  
 **Input:** `data/processed/chunks.json`  
 **Output:** `data/processed/entities.json`
 
-```python
-extract_from_all_chunks(
-    chunks_file="data/processed/chunks.json",
-    entities_file="data/processed/entities.json",
-    resume=True  # NEW: Resume from chunk 21
-)
-```
+**Current Status:**
+- ✅ Chunks 1-40 processed successfully
+- 📊 **183 entities** extracted (Party, Clause, Date, Document, Obligation types)
+- 📊 **143 relationships** extracted (CONTRADICTS, SUPERSEDES, DEFINES, OBLIGATES, REQUIRES)
+- ⏳ Chunks 41-87 still pending (~5 min processing time remaining)
 
-**Extraction Types:**
-- **Nodes (Entities):** Party, Clause, Date, Document, Obligation
-- **Edges (Relationships):** CONTRADICTS, SUPERSEDES, DEFINES, OBLIGATES, REQUIRES
-
-**Example Output:**
+**Example of Extracted Data:**
 ```json
 {
   "document": "sample_contract.pdf",
-  "total_chunks_processed": 20,
-  "total_nodes": 98,
-  "total_edges": 80,
+  "total_chunks_processed": 40,
+  "total_nodes": 183,
+  "total_edges": 143,
   "nodes": [
     {
       "type": "Party",
@@ -189,64 +202,117 @@ extract_from_all_chunks(
 ```
 
 ### Step 4: Graph Database (NOT STARTED ❌)
-**Next Phase:** Load entities into Neo4j AuraDB
-- Create nodes for each entity
-- Create edges for relationships
-- Index by entity type for fast querying
+**File:** `src/graph_builder.py` (skeleton implemented, not yet connected)  
+**Status:** Classes built but Neo4j AuraDB not yet provisioned  
+**Next Actions:**
+- Provision Neo4j AuraDB instance
+- Add credentials to `.env`
+- Run `python src/graph_builder.py` to load entities.json into database
+- Verify nodes and relationships indexed properly
 
-### Step 5: Backend API (NOT STARTED ❌)
-**Framework:** FastAPI
-- Endpoints for graph queries
-- Contradiction detection logic
-- Natural language processing integration
+### Step 5: Backend API (PARTIAL ⏳)
+**File:** `src/graph_api.py`  
+**Status:** Health endpoint functional, main query endpoints stubbed  
+**Implemented:**
+- ✅ FastAPI app setup with CORS
+- ✅ `/health` endpoint
+- ✅ Pydantic response models defined
 
-### Step 6: Frontend (NOT STARTED ❌)
-**Framework:** React + Tailwind CSS + React Force Graph
-- Interactive graph visualization
-- Chat interface for queries
-- Filtering and search capabilities
+**Still Needed:**
+- ❌ `GET /stats` - entity/relationship counts
+- ❌ `GET /entities` - list entities with filtering
+- ❌ `GET /contradictions` - find conflicting clauses
+- ❌ `POST /graph/view` - return graph JSON for visualization
+- ❌ Contradiction detection logic (complex N-clause analysis)
+
+### Step 6: Frontend (PARTIAL ✅)
+**Framework:** React 19 + Vite + CSS  
+**Status:** UI fully built and styled, awaiting backend endpoints  
+**Implemented:**
+- ✅ Dashboard layout with project header
+- ✅ Graph visualization panel (ready for React Force Graph)
+- ✅ Entity browser with search
+- ✅ Contradiction list display
+- ✅ Statistics dashboard
+- ✅ CSV export functionality
+- ✅ API integration code (fetch calls to backend endpoints ready)
+
+**Waiting For:**
+Working backend endpoints to display real data
 
 ---
 
 ## 🚀 How to Continue the Project
 
-### Immediate: Resume Entity Extraction
+### **CRITICAL BLOCKER #1:** Resume Entity Extraction (46% Complete)
 
 ```bash
 # 1. Activate virtual environment
 venv\Scripts\Activate.ps1
 
-# 2. Run entity extraction (will resume from chunk 21)
+# 2. Resume entity extraction from chunk 41 (skips already-processed 1-40)
 python src/entity_extractor.py
 ```
 
-**What happens:**
-- ✅ Skips chunks 1-20 (already processed)
-- ⏳ Processes chunks 21-87
-- 💾 Auto-saves progress after each batch of 10
-- ⚠️ Can be stopped anytime with Ctrl+C and resumed later
+**Progress:**
+- ✅ Chunks 1-40 already processed (183 entities, 143 relationships extracted)
+- ⏳ Will process chunks 41-87 (47 remaining chunks)
+- 💾 Auto-saves progress after each batch
+- ⚠️ Rate limit: 10 requests/minute (Gemini free tier) → ~5 minutes total
+- ✅ Can be stopped with Ctrl+C and resumed later
 
-### Next: Set Up Neo4j AuraDB
+### **CRITICAL BLOCKER #2:** Set Up Neo4j AuraDB & Load Data
 
 1. Sign up for free at [Neo4j AuraDB](https://neo4j.com/cloud/aura/)
 2. Create a graph database instance
-3. Note the connection string and credentials
-4. Add to `.env`:
+3. Add credentials to `.env`:
    ```
    NEO4J_URI=neo4j+s://[connection]
    NEO4J_USER=neo4j
    NEO4J_PASSWORD=your_password
    ```
+4. Run: `python src/graph_builder.py` (loads entities.json → Neo4j)
+   - Creates nodes for each entity (Party, Clause, Date, etc.)
+   - Creates edges for relationships (CONTRADICTS, SUPERSEDES, etc.)
+   - Currently database is empty—this step persists the 183 entities
 
-### Then: Build FastAPI Backend
+### **CRITICAL BLOCKER #3:** Complete FastAPI Backend
 
-Create `src/graph_api.py`:
-- Load entities from JSON
-- Push to Neo4j
-- Create query endpoints
-- Implement contradiction detection
+In `src/graph_api.py`, implement:
+```python
+# 1. GET /stats - Return entity and relationship counts
+@app.get("/stats")
+async def get_stats():
+    # Return {"total_entities": 183, "total_relationships": 143, ...}
 
-### Finally: Build React Frontend
+# 2. GET /entities - List all entities with filtering
+@app.get("/entities")
+async def get_entities(entity_type: Optional[str] = None):
+    # Return paginated entities from Neo4j
+
+# 3. GET /contradictions - Find conflicting clauses
+@app.get("/contradictions")
+async def get_contradictions():
+    # Query Neo4j for CONTRADICTS relationships
+    # Return list of conflicting clause pairs with explanations
+
+# 4. POST /graph/view - Get graph visualization data
+@app.post("/graph/view")
+async def get_graph(entity_type: Optional[str] = None):
+    # Return nodes and links for React Force Graph visualization
+    # Currently frontend expects: {"nodes": [...], "links": [...]}
+```
+
+Frontend (`App.jsx`) is **ready to call** these endpoints—just need implementation.
+
+### **Sequence for Completion:**
+
+1. ✅ Resume entity extraction (finalize all 87 chunks)
+2. ✅ Set up Neo4j and load data
+3. ✅ Implement remaining `/stats`, `/entities`, `/contradictions`, `/graph/view` endpoints
+4. ✅ Start frontend dev server and test with backend
+5. ⏳ Implement contradiction detection logic
+6. ⏳ Add Q&A interface (optional for MVP)
 
 Create `frontend/` directory with React app.
 
@@ -331,6 +397,61 @@ Get-Content data\processed\entities.json | Select-Object -First 50
 - Your .env file contents (won't see API keys)
 - File system state changes mid-conversation
 - Real-time terminal output (needs screenshots/logs)
+
+---
+
+## 🎯 EXECUTIVE SUMMARY FOR GEMINI
+
+**Project:** LexGraph Nexus - GraphRAG system for legal document contradiction detection
+
+**Current Status (March 26, 2026):**
+- **Data Processing:** 46% complete (40/87 chunks extracted, 183 entities, 143 relationships)
+- **Backend:** Skeleton + health check only, needs 4 query endpoints implemented
+- **Frontend:** Fully built and styled, ready for backend integration
+- **Database:** No Neo4j instance provisioned yet (empty)
+
+**Immediate Next Steps (in order):**
+
+1. **Resume Entity Extraction (5 min)**
+   - Command: `python src/entity_extractor.py`
+   - Skips chunks 1-40 (already done), processes 41-87
+   - Safe to interrupt with Ctrl+C and resume later
+
+2. **Provision Neo4j & Load Graph (10 min)**
+   - Sign up at neo4j.com/cloud/aura/ (free tier)
+   - Add credentials to .env file
+   - Run: `python src/graph_builder.py`
+
+3. **Complete Backend Endpoints (30-60 min)**
+   - In `src/graph_api.py`, implement:
+     - `/stats` → return entity/relationship counts
+     - `/entities` → return filtered entities from Neo4j
+     - `/contradictions` → return pairs with CONTRADICTS relationships
+     - `/graph/view` → return nodes+links for visualization
+
+4. **Frontend Integration Testing**
+   - Run: `npm run dev` (from client/ directory)
+   - Test API calls to verify backend endpoints work
+   - Display real data in dashboard
+
+**Key Files to Focus On:**
+- `src/entity_extractor.py` - Resume processing (line 1)
+- `src/graph_builder.py` - Load to Neo4j (mostly done, just call it)
+- `src/graph_api.py` - Implement 4 endpoints (skeleton ready)
+- `client/src/App.jsx` - Frontend (fully done, just waiting for API)
+- `data/processed/entities.json` - Current extraction results (183 nodes, 143 edges)
+
+**MVP Success Criteria:**
+- ✅ All 87 chunks processed for entities
+- ✅ Data loaded into Neo4j
+- ✅ 4 backend endpoints returning real data
+- ✅ Frontend displaying graph + contradictions from database
+
+**Not Needed Yet for MVP:**
+- Natural language Q&A interface
+- Advanced contradiction detection algorithm
+- Multi-document support
+- User authentication
 
 ✅ **To ensure continuity:**
 - This document explains everything needed

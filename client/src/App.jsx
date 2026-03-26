@@ -1,295 +1,497 @@
-import { useEffect, useMemo, useState } from 'react';
-
-const API_BASE = 'http://localhost:8000';
-
-const TYPE_COLORS = {
-  Party: '#0f4c75',
-  Clause: '#b33939',
-  Date: '#3d7c47',
-  Document: '#6f42c1',
-  Unknown: '#596275',
-};
-
-function StatCard({ label, value }) {
-  return (
-    <div className="card stat-card">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-    </div>
-  );
-}
+import React, { useState, useEffect, useRef } from 'react';
+import ForceGraph2D from 'react-force-graph-2d';
+import {
+  Search, Filter, BarChart3, Link2, AlertCircle, Download,
+  X, ChevronRight, Clock, Users, FileText, Zap
+} from 'lucide-react';
+import './styles.css';
 
 export default function App() {
-  const [health, setHealth] = useState('checking...');
-  const [stats, setStats] = useState({ total_nodes: 0, total_edges: 0 });
-  const [contradictions, setContradictions] = useState([]);
-  const [entityTypes, setEntityTypes] = useState([]);
-  const [selectedType, setSelectedType] = useState('');
+  // State Management
+  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
   const [entities, setEntities] = useState([]);
-  const [graph, setGraph] = useState({ nodes: [], links: [] });
-  const [selectedNodeKey, setSelectedNodeKey] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState({ total_entities: 0, total_relationships: 0 });
+  const [contradictions, setContradictions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const contradictionCount = useMemo(() => contradictions.length, [contradictions]);
+  // UI State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState('All');
+  const [selectedEntity, setSelectedEntity] = useState(null);
+  const [selectedRelationship, setSelectedRelationship] = useState(null);
+  const [highlightedNode, setHighlightedNode] = useState(null);
+  const [hoveredNode, setHoveredNode] = useState(null);
+  
+  const graphRef = useRef();
 
-  const positionedNodes = useMemo(() => {
-    const width = 720;
-    const height = 420;
-    const cx = width / 2;
-    const cy = height / 2;
-    const radius = Math.min(width, height) * 0.36;
-    const total = Math.max(graph.nodes.length, 1);
+  // Entity type colors
+  const entityColors = {
+    Party: '#0d9488',
+    Clause: '#0891b2',
+    Date: '#d97706',
+    Document: '#7c3aed',
+    Obligation: '#dc2626',
+  };
 
-    return graph.nodes.map((node, idx) => {
-      const angle = (idx / total) * Math.PI * 2;
-      return {
-        ...node,
-        x: cx + Math.cos(angle) * radius,
-        y: cy + Math.sin(angle) * radius,
-        color: TYPE_COLORS[node.type] || TYPE_COLORS.Unknown,
-      };
-    });
-  }, [graph.nodes]);
+  // Filter options
+  const filters = ['All', 'Party', 'Clause', 'Date', 'Document', 'Obligation'];
 
-  const nodeIndex = useMemo(() => {
-    const map = {};
-    positionedNodes.forEach((n) => {
-      map[n.key] = n;
-    });
-    return map;
-  }, [positionedNodes]);
-
-  const selectedNode = selectedNodeKey ? nodeIndex[selectedNodeKey] : null;
-
-  const selectedLinks = useMemo(() => {
-    if (!selectedNodeKey) {
-      return [];
-    }
-    return graph.links.filter((l) => l.source === selectedNodeKey || l.target === selectedNodeKey);
-  }, [graph.links, selectedNodeKey]);
-
-  async function getJson(path) {
-    const res = await fetch(`${API_BASE}${path}`);
-    if (!res.ok) {
-      throw new Error(`Request failed: ${res.status}`);
-    }
-    return res.json();
-  }
-
-  async function loadDashboard() {
-    setLoading(true);
-    try {
-      const [healthRes, statsRes, contradictionRes, typeRes, graphRes] = await Promise.all([
-        getJson('/health'),
-        getJson('/stats'),
-        getJson('/contradictions?limit=10'),
-        getJson('/entities/types'),
-        getJson('/graph/view?limit=200'),
-      ]);
-
-      setHealth(healthRes.status || 'unknown');
-      setStats(statsRes);
-      setContradictions(contradictionRes);
-      setEntityTypes(typeRes.types || []);
-      setGraph(graphRes || { nodes: [], links: [] });
-    } catch (err) {
-      setHealth(`error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function exportContradictionsCsv() {
-    if (!contradictions.length) {
-      return;
-    }
-    const lines = [
-      'clause_a,clause_b,relation,reason',
-      ...contradictions.map((c) => {
-        const safe = (v) => `"${String(v || '').replaceAll('"', '""')}"`;
-        return [safe(c.clause_a), safe(c.clause_b), safe(c.relation), safe(c.reason)].join(',');
-      }),
-    ];
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'contradictions.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  async function loadEntities(type = '') {
-    setLoading(true);
-    try {
-      const query = type ? `/entities?entity_type=${encodeURIComponent(type)}&limit=20` : '/entities?limit=20';
-      const data = await getJson(query);
-      setEntities(data);
-    } catch (err) {
-      setEntities([]);
-      setHealth(`error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  // API Integration
   useEffect(() => {
-    loadDashboard();
-    loadEntities('');
+    fetchData();
   }, []);
 
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [statsRes, entitiesRes, graphRes, contradictionsRes] = await Promise.all([
+        fetch('http://localhost:8000/stats'),
+        fetch('http://localhost:8000/entities'),
+        fetch('http://localhost:8000/graph/view', { method: 'POST' }),
+        fetch('http://localhost:8000/contradictions'),
+      ]);
+
+      if (!statsRes.ok || !entitiesRes.ok || !graphRes.ok || !contradictionsRes.ok) {
+        throw new Error('Backend not responding. Make sure FastAPI server is running on http://localhost:8000');
+      }
+
+      const statsData = await statsRes.json();
+      const entitiesData = await entitiesRes.json();
+      const graphJSONData = await graphRes.json();
+      const contradictionsData = await contradictionsRes.json();
+
+      setStats(statsData);
+      setEntities(entitiesData);
+      setGraphData(graphJSONData);
+      setContradictions(contradictionsData);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+      console.error('Failed to fetch data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filtered Data
+  const filteredEntities = entities.filter(e => {
+    const matchesFilter = activeFilter === 'All' || e.type === activeFilter;
+    const matchesSearch = e.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
+
+  const filteredGraph = {
+    nodes: graphData.nodes?.filter(n => 
+      activeFilter === 'All' ? true : n.type === activeFilter
+    ) || [],
+    links: graphData.links?.filter(l => {
+      const sourceNode = graphData.nodes?.find(n => n.id === l.source);
+      const targetNode = graphData.nodes?.find(n => n.id === l.target);
+      return activeFilter === 'All' || 
+        sourceNode?.type === activeFilter || 
+        targetNode?.type === activeFilter;
+    }) || [],
+  };
+
+  // Graph interaction handlers
+  const handleNodeClick = (node) => {
+    setSelectedEntity(node);
+    setHighlightedNode(node.id);
+    // Zoom to node
+    if (graphRef.current) {
+      graphRef.current.centerAt(node.x, node.y, 500);
+      graphRef.current.zoom(2, 500);
+    }
+  };
+
+  const handleLinkClick = (link) => {
+    const source = filteredGraph.nodes.find(n => n.id === link.source);
+    const target = filteredGraph.nodes.find(n => n.id === link.target);
+    setSelectedRelationship({ ...link, sourceNode: source, targetNode: target });
+  };
+
+  const handleNodeHover = (node) => {
+    setHoveredNode(node?.id || null);
+  };
+
+  // Export functionality
+  const exportToCSV = () => {
+    const csv = [
+      ['Entity Name', 'Type', 'Description', 'Connected To'].join(','),
+      ...filteredEntities.map(e => 
+        [e.name, e.type, '"' + (e.description || '') + '"', 
+         filteredGraph.links.filter(l => l.source === e.id || l.target === e.id).length].join(',')
+      )
+    ].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'entities.csv';
+    a.click();
+  };
+
+  if (loading && !graphData.nodes?.length) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading knowledge graph...</p>
+          {error && <p className="text-red-600 mt-2 text-sm">{error}</p>}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="page">
-      <header className="hero">
-        <h1>LexGraph Nexus</h1>
-        <p>Legal Contradiction Intelligence Dashboard</p>
-        <button className="btn" onClick={loadDashboard} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh Data'}
-        </button>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Header */}
+      <header className="bg-gradient-to-r from-primary to-secondary text-white shadow-lg">
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold flex items-center gap-2">
+                <Zap className="w-8 h-8" />
+                LexGraph Nexus
+              </h1>
+              <p className="text-teal-100 mt-1">Legal Document Contradiction Detector</p>
+            </div>
+            <button
+              onClick={fetchData}
+              className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition"
+              title="Refresh data"
+            >
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
       </header>
 
-      <section className="stats-grid">
-        <StatCard label="API Health" value={health} />
-        <StatCard label="Graph Nodes" value={stats.total_nodes} />
-        <StatCard label="Graph Edges" value={stats.total_edges} />
-        <StatCard label="Contradictions" value={contradictionCount} />
-      </section>
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 mx-6 mt-6 rounded">
+          <div className="flex gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-red-900">Connection Error</h3>
+              <p className="text-red-700 text-sm">{error}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
-      <section className="panel-grid">
-        <article className="card">
-          <div className="panel-head">
-            <h2>Top Contradictions</h2>
-            <button className="btn btn-ghost" onClick={exportContradictionsCsv} disabled={!contradictions.length}>
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-primary">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-500 text-sm font-medium">Total Entities</p>
+                <p className="text-3xl font-bold text-slate-900 mt-1">{stats.total_entities || 0}</p>
+              </div>
+              <Users className="w-10 h-10 text-primary opacity-20" />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-secondary">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-500 text-sm font-medium">Relationships</p>
+                <p className="text-3xl font-bold text-slate-900 mt-1">{stats.total_relationships || 0}</p>
+              </div>
+              <Link2 className="w-10 h-10 text-secondary opacity-20" />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-500 text-sm font-medium">Contradictions</p>
+                <p className="text-3xl font-bold text-slate-900 mt-1">{contradictions.length || 0}</p>
+              </div>
+              <AlertCircle className="w-10 h-10 text-red-500 opacity-20" />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-amber-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-500 text-sm font-medium">Avg Connections</p>
+                <p className="text-3xl font-bold text-slate-900 mt-1">
+                  {stats.total_entities ? Math.round(stats.total_relationships * 2 / stats.total_entities) : 0}
+                </p>
+              </div>
+              <BarChart3 className="w-10 h-10 text-amber-500 opacity-20" />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left: Graph Visualization */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+              <div className="h-[600px] border-b border-slate-200">
+                {filteredGraph.nodes.length > 0 ? (
+                  <ForceGraph2D
+                    ref={graphRef}
+                    graphData={filteredGraph}
+                    nodeRelSize={6}
+                    linkWidth={link => link.source === highlightedNode || link.target === highlightedNode ? 2 : 1}
+                    nodeColor={node => 
+                      highlightedNode === node.id ? '#fff000' : entityColors[node.type] || '#0d9488'
+                    }
+                    nodeVal={node => {
+                      const connections = filteredGraph.links.filter(
+                        l => l.source === node.id || l.target === node.id
+                      ).length;
+                      return 4 + connections * 0.5;
+                    }}
+                    linkColor={link => 
+                      link.source === highlightedNode || link.target === highlightedNode
+                        ? '#0d9488'
+                        : '#d1d5db'
+                    }
+                    onNodeClick={handleNodeClick}
+                    onNodeHover={handleNodeHover}
+                    onLinkClick={handleLinkClick}
+                    linkDirectionalParticles={2}
+                    linkDirectionalParticleWidth={link => 
+                      link.source === highlightedNode || link.target === highlightedNode ? 2 : 0
+                    }
+                    d3VelocityDecay={0.3}
+                    warmupTicks={100}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-400">
+                    No entities to display
+                  </div>
+                )}
+              </div>
+
+              {/* Legend */}
+              <div className="p-4 bg-slate-50 border-t border-slate-200">
+                <p className="text-xs font-semibold text-slate-600 mb-3">Entity Types</p>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  {Object.entries(entityColors).map(([type, color]) => (
+                    <div key={type} className="flex items-center gap-2">
+                      <div
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: color }}
+                      ></div>
+                      <span className="text-xs text-slate-600">{type}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Controls & Details */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* Search */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <label className="block text-sm font-semibold text-slate-900 mb-3">
+                Search Entities
+              </label>
+              <div className="relative">
+                <Search className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+
+              {/* Search Results Dropdown */}
+              {searchQuery && filteredEntities.length > 0 && (
+                <div className="mt-2 border border-slate-200 rounded-lg max-h-48 overflow-y-auto">
+                  {filteredEntities.slice(0, 5).map(entity => (
+                    <button
+                      key={entity.id}
+                      onClick={() => {
+                        setSelectedEntity(entity);
+                        setHighlightedNode(entity.id);
+                        setSearchQuery('');
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-b-0 text-sm"
+                    >
+                      <span className="font-medium">{entity.name}</span>
+                      <span className="text-slate-400 ml-2 text-xs">
+                        ({entity.type})
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Filters */}
+            <div className="bg-white rounded-lg shadow p-4">
+              <label className="block text-sm font-semibold text-slate-900 mb-3">
+                Filter by Type
+              </label>
+              <div className="space-y-2">
+                {filters.map(filter => (
+                  <button
+                    key={filter}
+                    onClick={() => setActiveFilter(filter)}
+                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition text-left ${
+                      activeFilter === filter
+                        ? 'bg-primary text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <Filter className="w-4 h-4 inline mr-2" />
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Entity Details */}
+            {selectedEntity && (
+              <div className="bg-white rounded-lg shadow p-4 border-l-4 border-primary">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="font-bold text-slate-900">{selectedEntity.name}</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      <span className="inline-block px-2 py-1 bg-slate-100 rounded mt-1">
+                        {selectedEntity.type}
+                      </span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedEntity(null)}
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {selectedEntity.description && (
+                  <p className="text-sm text-slate-600 mb-4">{selectedEntity.description}</p>
+                )}
+
+                {/* Connected Entities */}
+                <div className="border-t border-slate-200 pt-4">
+                  <h4 className="text-xs font-semibold text-slate-600 uppercase mb-3">
+                    Connected Entities
+                  </h4>
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
+                    {filteredGraph.links
+                      .filter(l => l.source === selectedEntity.id || l.target === selectedEntity.id)
+                      .map((link, i) => {
+                        const related = link.source === selectedEntity.id 
+                          ? filteredGraph.nodes.find(n => n.id === link.target)
+                          : filteredGraph.nodes.find(n => n.id === link.source);
+                        return related ? (
+                          <button
+                            key={i}
+                            onClick={() => setSelectedEntity(related)}
+                            className="w-full text-left px-2 py-2 bg-slate-50 rounded hover:bg-slate-100 text-xs transition"
+                          >
+                            <div className="font-medium text-slate-700">{related.name}</div>
+                            <div className="text-slate-500">{link.type}</div>
+                          </button>
+                        ) : null;
+                      })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Relationship Details */}
+            {selectedRelationship && (
+              <div className="bg-white rounded-lg shadow p-4 border-l-4 border-secondary">
+                <div className="flex items-start justify-between mb-4">
+                  <h3 className="font-bold text-slate-900">Relationship</h3>
+                  <button
+                    onClick={() => setSelectedRelationship(null)}
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <p className="text-slate-500">From</p>
+                    <p className="font-medium text-slate-900">
+                      {selectedRelationship.sourceNode?.name}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <ChevronRight className="w-5 h-5 text-secondary" />
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Relationship</p>
+                    <p className="font-semibold text-secondary">
+                      {selectedRelationship.type}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <ChevronRight className="w-5 h-5 text-secondary" />
+                  </div>
+                  <div>
+                    <p className="text-slate-500">To</p>
+                    <p className="font-medium text-slate-900">
+                      {selectedRelationship.targetNode?.name}
+                    </p>
+                  </div>
+                  {selectedRelationship.reason && (
+                    <div className="border-t border-slate-200 pt-3 mt-3">
+                      <p className="text-slate-500 mb-1">Reason</p>
+                      <p className="text-slate-700 text-xs">{selectedRelationship.reason}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Export Button */}
+            <button
+              onClick={exportToCSV}
+              className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-teal-700 transition font-medium flex items-center justify-center gap-2"
+            >
+              <Download className="w-4 h-4" />
               Export CSV
             </button>
           </div>
-          <div className="list">
-            {contradictions.length === 0 ? (
-              <p className="muted">No contradictions found yet.</p>
-            ) : (
-              contradictions.map((item, idx) => (
-                <div key={`${item.clause_a}-${item.clause_b}-${idx}`} className="list-item">
-                  <h3>{item.clause_a} vs {item.clause_b}</h3>
-                  <p>{item.reason || 'No reason provided'}</p>
-                  <span className="pill">{item.relation}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </article>
+        </div>
 
-        <article className="card">
-          <div className="panel-head">
-            <h2>Entity Explorer</h2>
-            <select
-              value={selectedType}
-              onChange={(e) => {
-                const t = e.target.value;
-                setSelectedType(t);
-                loadEntities(t);
-              }}
-            >
-              <option value="">All Types</option>
-              {entityTypes.map((type) => (
-                <option key={type} value={type}>{type}</option>
+        {/* Contradictions Section */}
+        {contradictions.length > 0 && (
+          <div className="mt-8 bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <AlertCircle className="w-6 h-6 text-red-500" />
+              Detected Contradictions ({contradictions.length})
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {contradictions.map((contradiction, i) => (
+                <div
+                  key={i}
+                  className="border border-red-200 bg-red-50 rounded-lg p-4 cursor-pointer hover:shadow-md transition"
+                  onClick={() => {
+                    setHighlightedNode(contradiction.clause1);
+                    setSelectedEntity(
+                      filteredGraph.nodes.find(n => n.id === contradiction.clause1)
+                    );
+                  }}
+                >
+                  <p className="text-sm font-semibold text-red-900">
+                    {contradiction.clause1} ↔ {contradiction.clause2}
+                  </p>
+                  <p className="text-xs text-red-700 mt-2">{contradiction.reason}</p>
+                </div>
               ))}
-            </select>
+            </div>
           </div>
-
-          <div className="list">
-            {entities.length === 0 ? (
-              <p className="muted">No entities to display.</p>
-            ) : (
-              entities.map((entity) => (
-                <div key={entity.key} className="list-item">
-                  <h3>{entity.name}</h3>
-                  <p>{entity.description || 'No description'}</p>
-                  <span className="pill">{entity.type}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </article>
-      </section>
-
-      <section className="graph-section card">
-        <div className="panel-head">
-          <h2>Graph View</h2>
-          <p className="muted">Click a node to inspect connected relationships.</p>
-        </div>
-
-        <div className="graph-wrap">
-          <svg viewBox="0 0 720 420" className="graph-svg" role="img" aria-label="Knowledge graph">
-            {graph.links.map((link, idx) => {
-              const source = nodeIndex[link.source];
-              const target = nodeIndex[link.target];
-              if (!source || !target) {
-                return null;
-              }
-              const highlighted =
-                selectedNodeKey && (link.source === selectedNodeKey || link.target === selectedNodeKey);
-              return (
-                <line
-                  key={`${link.source}-${link.target}-${idx}`}
-                  x1={source.x}
-                  y1={source.y}
-                  x2={target.x}
-                  y2={target.y}
-                  className={highlighted ? 'graph-line active' : 'graph-line'}
-                />
-              );
-            })}
-
-            {positionedNodes.map((node) => {
-              const active = selectedNodeKey === node.key;
-              return (
-                <g key={node.key}>
-                  <circle
-                    cx={node.x}
-                    cy={node.y}
-                    r={active ? 9 : 7}
-                    fill={node.color}
-                    className={active ? 'graph-node active' : 'graph-node'}
-                    onClick={() => setSelectedNodeKey(node.key === selectedNodeKey ? '' : node.key)}
-                  />
-                  {active && (
-                    <text x={node.x + 10} y={node.y - 10} className="graph-label">
-                      {node.name}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-
-          <aside className="graph-inspector">
-            {!selectedNode ? (
-              <p className="muted">Select a node in the graph to inspect details.</p>
-            ) : (
-              <>
-                <h3>{selectedNode.name}</h3>
-                <span className="pill">{selectedNode.type}</span>
-                <h4>Connections</h4>
-                <div className="list compact">
-                  {selectedLinks.length === 0 ? (
-                    <p className="muted">No links found.</p>
-                  ) : (
-                    selectedLinks.map((link, idx) => {
-                      const other = link.source === selectedNode.key ? nodeIndex[link.target] : nodeIndex[link.source];
-                      return (
-                        <div className="list-item" key={`${link.relation}-${idx}`}>
-                          <h3>{other ? other.name : 'Unknown'}</h3>
-                          <span className="pill">{link.relation}</span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </>
-            )}
-          </aside>
-        </div>
-      </section>
+        )}
+      </main>
     </div>
   );
 }
