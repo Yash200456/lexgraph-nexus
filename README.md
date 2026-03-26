@@ -26,22 +26,22 @@ Instead of relying only on plain text search, the system extracts legal entities
 
 ## 🧠 System Architecture
 1. **Ingestion Layer**
-	- Extract text from legal PDFs (`src/pdf_extractor.py`)
-	- Chunk documents for LLM processing (`src/chunker.py`)
+   - Extract text from legal PDFs (`src/pdf_extractor.py`)
+   - Chunk documents for LLM processing (`src/chunker.py`)
 
 2. **AI Extraction Layer**
-	- Gemini-driven extraction of entities + relationships (`src/entity_extractor.py`)
-	- Output persisted as structured JSON in `data/processed/`
+   - Gemini-driven extraction of entities + relationships (`src/entity_extractor.py`)
+   - Output persisted as structured JSON in `data/processed/`
 
 3. **Graph Persistence Layer**
-	- Load/merge graph records into Neo4j (`src/graph_builder.py`)
+   - Load/merge graph records into Neo4j (`src/graph_builder.py`)
 
 4. **Backend API Layer**
-	- FastAPI service for graph queries and contradiction analysis (`src/graph_api.py`)
+   - FastAPI service for graph queries and contradiction analysis (`src/graph_api.py`)
 
 5. **Frontend Layer**
-	- React + Vite + Tailwind client (`client/`)
-	- Force graph visualization + analytics + dark mode
+   - React + Vite + Tailwind client (`client/`)
+   - Force graph visualization + analytics + dark mode
 
 ## 💻 Tech Stack
 - **Frontend:** React 19, Vite, Tailwind CSS, React-Force-Graph-2D, Recharts, Lucide React
