@@ -285,9 +285,9 @@ const MemoStatCard = memo(function MemoStatCard({ card, idx, pageLoadComplete, l
   );
 });
 
-const MemoChartShell = memo(function MemoChartShell({ title, children }) {
+const MemoChartShell = memo(function MemoChartShell({ title, children, className = '' }) {
   return (
-    <GlassCard className="p-4">
+    <GlassCard className={`p-4 ${className}`}>
       <h3 className="mb-3 text-base font-bold">{title}</h3>
       <div className="h-72">{children}</div>
     </GlassCard>
@@ -448,14 +448,24 @@ function GraphControlsPanel({
   nodeDraggingLocked,
   setNodeDraggingLocked,
   graphRef,
-  isMobileView,
-  showMobileControls,
+  className = '',
+  showCloseButton = false,
+  onClose,
 }) {
   return (
-    <div className={`pointer-events-auto fixed z-50 space-y-2 rounded-xl border border-slate-200 bg-white/90 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 ${
-      isMobileView ? `bottom-20 left-4 right-4 ${showMobileControls ? '' : 'hidden'}` : 'bottom-6 left-6'
-    }`}>
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Graph Controls</p>
+    <div className={`pointer-events-auto w-full space-y-2 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 ${className}`}>
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Graph Controls</p>
+        {showCloseButton && (
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+            title="Close controls"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
       <div className="space-y-2">
         <button
           onClick={() => graphRef.current?.centerAt(0, 0, 800) || null}
@@ -603,7 +613,7 @@ export default function App() {
   const [timeTravelChunk, setTimeTravelChunk] = useState(40);
   const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
   const [comparisonSelection, setComparisonSelection] = useState({ a: '', b: '' });
-  const [selectedContradictionPath, setSelectedContradictionPath] = useState(null);
+  const [selectedContradictionPath, setSelectedContradictionPath] = useState({ aId: '', bId: '' });
   const [pathAnimationStep, setPathAnimationStep] = useState(0);
   const [highlightedPathNodeIds, setHighlightedPathNodeIds] = useState([]);
   const [nodeNotes, setNodeNotes] = useState({});
@@ -836,6 +846,8 @@ export default function App() {
       const q = debouncedSearchQuery.toLowerCase();
       const matchesSearch = n.name.toLowerCase().includes(q) || n.description.toLowerCase().includes(q);
       const visibleInLegend = !hiddenEntityTypes.has(n.type);
+      const chunkIndex = extractChunkIndex(n);
+      const matchesChunk = chunkIndex <= timeTravelChunk;
       let matchesDateRange = true;
       if (!Number.isNaN(fromTs) || !Number.isNaN(toTs)) {
         const ts = extractEntityTimestamp(n);
@@ -847,9 +859,9 @@ export default function App() {
           matchesDateRange = ts <= toTs;
         }
       }
-      return matchesFilter && matchesSearch && visibleInLegend && matchesDateRange;
+      return matchesFilter && matchesSearch && visibleInLegend && matchesDateRange && matchesChunk;
     });
-  }, [nodes, activeFilter, debouncedSearchQuery, hiddenEntityTypes, advancedFilters.dateFrom, advancedFilters.dateTo]);
+  }, [nodes, activeFilter, debouncedSearchQuery, hiddenEntityTypes, advancedFilters.dateFrom, advancedFilters.dateTo, timeTravelChunk]);
 
   const baseFilteredNodeIds = useMemo(() => new Set(baseFilteredNodes.map((n) => n.id)), [baseFilteredNodes]);
 
@@ -1054,6 +1066,146 @@ export default function App() {
     const max = Math.max(1, ...Array.from(map.values()));
     return { types, map, max };
   }, [nodes, linksWithMetadata, nodeMap]);
+
+  const maxChunkIndex = useMemo(() => {
+    const maxDetected = Math.max(1, ...nodes.map((n) => extractChunkIndex(n)));
+    return Math.max(40, maxDetected);
+  }, [nodes]);
+
+  useEffect(() => {
+    setTimeTravelChunk((prev) => Math.min(prev, maxChunkIndex));
+  }, [maxChunkIndex]);
+
+  useEffect(() => {
+    if (!isPlaybackRunning) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setTimeTravelChunk((prev) => {
+        if (prev >= maxChunkIndex) {
+          setIsPlaybackRunning(false);
+          return maxChunkIndex;
+        }
+        return prev + 1;
+      });
+    }, 380);
+    return () => clearInterval(timer);
+  }, [isPlaybackRunning, maxChunkIndex]);
+
+  const comparisonData = useMemo(() => {
+    const a = nodeMap.get(comparisonSelection.a);
+    const b = nodeMap.get(comparisonSelection.b);
+    if (!a || !b) {
+      return null;
+    }
+
+    const neighborsFor = (id) => {
+      const rels = [];
+      const names = new Set();
+      linksWithMetadata.forEach((l) => {
+        if (l.sourceId === id) {
+          names.add(nodeMap.get(l.targetId)?.name || l.targetId);
+          rels.push(`${l.type}->${l.targetId}`);
+        } else if (l.targetId === id) {
+          names.add(nodeMap.get(l.sourceId)?.name || l.sourceId);
+          rels.push(`${l.type}->${l.sourceId}`);
+        }
+      });
+      return { names, rels: new Set(rels) };
+    };
+
+    const aN = neighborsFor(a.id);
+    const bN = neighborsFor(b.id);
+    const uniqueA = [...aN.names].filter((name) => !bN.names.has(name));
+    const uniqueB = [...bN.names].filter((name) => !aN.names.has(name));
+    return { a, b, uniqueA, uniqueB, sharedCount: [...aN.names].filter((name) => bN.names.has(name)).length };
+  }, [comparisonSelection, linksWithMetadata, nodeMap]);
+
+  const contradictionPath = useMemo(() => {
+    if (!selectedContradictionPath?.aId || !selectedContradictionPath?.bId) {
+      return [];
+    }
+
+    const start = selectedContradictionPath.aId;
+    const goal = selectedContradictionPath.bId;
+    const queue = [[start]];
+    const visited = new Set([start]);
+    const adjacency = new Map();
+
+    linksWithMetadata.forEach((l) => {
+      if (!adjacency.has(l.sourceId)) adjacency.set(l.sourceId, []);
+      if (!adjacency.has(l.targetId)) adjacency.set(l.targetId, []);
+      adjacency.get(l.sourceId).push({ next: l.targetId, link: l });
+      adjacency.get(l.targetId).push({ next: l.sourceId, link: l });
+    });
+
+    while (queue.length > 0) {
+      const path = queue.shift();
+      const current = path[path.length - 1];
+      if (current === goal) {
+        return path;
+      }
+      const nexts = adjacency.get(current) || [];
+      nexts.forEach(({ next }) => {
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push([...path, next]);
+        }
+      });
+    }
+    return [];
+  }, [selectedContradictionPath, linksWithMetadata]);
+
+  useEffect(() => {
+    if (contradictionPath.length === 0) {
+      setHighlightedPathNodeIds([]);
+      setPathAnimationStep(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setPathAnimationStep((prev) => {
+        const next = prev + 1;
+        const capped = Math.min(next, contradictionPath.length);
+        setHighlightedPathNodeIds(contradictionPath.slice(0, capped));
+        if (capped >= contradictionPath.length) {
+          clearInterval(timer);
+        }
+        return capped;
+      });
+    }, 500);
+    return () => clearInterval(timer);
+  }, [contradictionPath]);
+
+  const smartSuggestions = useMemo(() => {
+    if (nodes.length === 0) {
+      return [];
+    }
+    const entries = nodes.map((n) => ({ node: n, degree: degreeMap.get(n.id) ?? 0 }));
+    const isolated = entries.reduce((min, cur) => (cur.degree < min.degree ? cur : min), entries[0]);
+    const avg = entries.reduce((sum, e) => sum + e.degree, 0) / Math.max(1, entries.length);
+    const unusual = entries.filter((e) => e.degree >= avg * 2.5).slice(0, 3);
+    const possibleMissing = linksWithMetadata.length > 0
+      ? nodes
+          .filter((n) => (degreeMap.get(n.id) ?? 0) === 1)
+          .slice(0, 3)
+      : [];
+
+    return [
+      `Most isolated entity: ${isolated.node.name} (${isolated.degree} links)`,
+      possibleMissing.length
+        ? `Possible missing relationships near: ${possibleMissing.map((n) => n.name).join(', ')}`
+        : 'Possible missing relationships: insufficient signal yet',
+      unusual.length
+        ? `Unusual connection patterns: ${unusual.map((e) => `${e.node.name} (${e.degree})`).join(', ')}`
+        : 'No unusual connection patterns detected yet',
+    ];
+  }, [nodes, degreeMap, linksWithMetadata]);
+
+  const selectableNodesForControls = useMemo(() => {
+    return [...filteredNodes]
+      .sort((a, b) => (degreeMap.get(b.id) ?? 0) - (degreeMap.get(a.id) ?? 0))
+      .slice(0, 180);
+  }, [filteredNodes, degreeMap]);
 
   const selectedEntityConnections = useMemo(() => {
     if (!selectedEntity) {
@@ -1548,6 +1700,72 @@ export default function App() {
     }
   };
 
+  const saveCurrentView = () => {
+    const payload = {
+      id: `${Date.now()}`,
+      label: `View ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      data: {
+        activeFilter,
+        searchQuery,
+        selectedRelationshipType,
+        highlightedNodeId: highlightedNodeIds[0] || '',
+        timeTravelChunk,
+      },
+    };
+    setSavedViews((prev) => [payload, ...prev].slice(0, 10));
+    pushToast('success', 'View saved');
+  };
+
+  const applySavedView = (view) => {
+    const data = view?.data;
+    if (!data) {
+      return;
+    }
+    setActiveFilter(data.activeFilter || 'All');
+    setSearchQuery(data.searchQuery || '');
+    setSelectedRelationshipType(data.selectedRelationshipType || '');
+    setTimeTravelChunk(data.timeTravelChunk || 1);
+    if (data.highlightedNodeId) {
+      highlightNodeInGraph(data.highlightedNodeId);
+    }
+    pushToast('success', 'View applied');
+  };
+
+  const deleteSavedView = (id) => {
+    setSavedViews((prev) => prev.filter((v) => v.id !== id));
+  };
+
+  const exportSelectedSubgraph = () => {
+    const anchorId = highlightedNodeIds[0] || selectedEntity?.id;
+    if (!anchorId) {
+      pushToast('error', 'Select or highlight an entity first');
+      return;
+    }
+    const nodeIds = new Set([anchorId]);
+    const localLinks = linksWithMetadata.filter((l) => {
+      if (l.sourceId === anchorId || l.targetId === anchorId) {
+        nodeIds.add(l.sourceId);
+        nodeIds.add(l.targetId);
+        return true;
+      }
+      return false;
+    });
+    const localNodes = [...nodeIds].map((id) => nodeMap.get(id)).filter(Boolean);
+
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      anchor: anchorId,
+      nodes: localNodes,
+      links: localLinks,
+    };
+    downloadBlob('subgraph.json', new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+    pushToast('success', 'Subgraph exported');
+  };
+
+  const updateNodeNote = (nodeId, note) => {
+    setNodeNotes((prev) => ({ ...prev, [nodeId]: note }));
+  };
+
   const statCards = [
     { label: 'Entities', value: displayedStats.total_nodes, icon: Users },
     { label: 'Relationships', value: displayedStats.total_edges, icon: Link2 },
@@ -1793,14 +2011,15 @@ export default function App() {
               </div>
             )}
 
-            <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
-              {loading && nodes.length === 0 ? (
-                <SkeletonGraphArea />
-              ) : graphData.nodes.length === 0 ? (
-                <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
-              ) : (
-                <div onMouseMove={handleGraphMouseMove}>
-                  <MemoForceGraph2D
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_240px]">
+              <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
+                {loading && nodes.length === 0 ? (
+                  <SkeletonGraphArea />
+                ) : graphData.nodes.length === 0 ? (
+                  <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
+                ) : (
+                  <div onMouseMove={handleGraphMouseMove}>
+                    <MemoForceGraph2D
                     ref={graphRef}
                     graphData={graphData}
                     nodeLabel={labelsAlwaysVisible || graphZoomLevel > 1.6 ? (node) => `${node.name} (${node.type})` : () => ''}
@@ -1818,6 +2037,17 @@ export default function App() {
                     nodeVisibility={isNodeVisible}
                     linkVisibility={isLinkVisible}
                     nodeColor={(node) => {
+                      const isComparisonNode =
+                        node.id && (node.id === comparisonSelection.a || node.id === comparisonSelection.b);
+                      const isPathNode = highlightedPathNodeIds.includes(node.id);
+
+                      if (isComparisonNode) {
+                        return '#7c3aed';
+                      }
+                      if (isPathNode) {
+                        return '#dc2626';
+                      }
+
                       // === 1B: Click-to-Focus Mode - dim other nodes ===
                       if (focusMode && highlightedNodeIds.length > 0) {
                         if (highlightedNodeIds.includes(node.id)) {
@@ -1870,6 +2100,17 @@ export default function App() {
                     linkColor={(link) => {
                       const source = getLinkNodeId(link.source);
                       const target = getLinkNodeId(link.target);
+                      const inPath = highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target);
+                      const inComparison =
+                        (source === comparisonSelection.a || source === comparisonSelection.b) &&
+                        (target === comparisonSelection.a || target === comparisonSelection.b);
+
+                      if (inPath) {
+                        return '#dc2626';
+                      }
+                      if (inComparison) {
+                        return '#7c3aed';
+                      }
 
                       if (focusMode && highlightedNodeIds.length > 0) {
                         const isHighlighted =
@@ -1887,11 +2128,23 @@ export default function App() {
                     linkWidth={(link) => {
                       const source = getLinkNodeId(link.source);
                       const target = getLinkNodeId(link.target);
+                      if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
+                        return 3.2;
+                      }
+                      if (
+                        (source === comparisonSelection.a || source === comparisonSelection.b) &&
+                        (target === comparisonSelection.a || target === comparisonSelection.b)
+                      ) {
+                        return 2.8;
+                      }
                       return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2.4 : 1;
                     }}
                     linkDirectionalParticles={(link) => {
                       const source = getLinkNodeId(link.source);
                       const target = getLinkNodeId(link.target);
+                      if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
+                        return 4;
+                      }
                       return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2 : 0;
                     }}
                     linkDirectionalParticleWidth={2}
@@ -1899,10 +2152,44 @@ export default function App() {
                     d3VelocityDecay={0.26}
                     dagMode={null}
                     enableNodeDrag={!nodeDraggingLocked}
-                  />
-                </div>
-              )}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="hidden xl:block">
+                <GraphControlsPanel
+                  physicsEnabled={physicsEnabled}
+                  setPhysicsEnabled={setPhysicsEnabled}
+                  labelsAlwaysVisible={labelsAlwaysVisible}
+                  setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+                  edgeLabelsVisible={edgeLabelsVisible}
+                  setEdgeLabelsVisible={setEdgeLabelsVisible}
+                  nodeDraggingLocked={nodeDraggingLocked}
+                  setNodeDraggingLocked={setNodeDraggingLocked}
+                  graphRef={graphRef}
+                  className="h-[520px]"
+                />
+              </div>
             </div>
+
+            {isMobileView && showMobileControls && (
+              <div className="mt-3 xl:hidden">
+                <GraphControlsPanel
+                  physicsEnabled={physicsEnabled}
+                  setPhysicsEnabled={setPhysicsEnabled}
+                  labelsAlwaysVisible={labelsAlwaysVisible}
+                  setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+                  edgeLabelsVisible={edgeLabelsVisible}
+                  setEdgeLabelsVisible={setEdgeLabelsVisible}
+                  nodeDraggingLocked={nodeDraggingLocked}
+                  setNodeDraggingLocked={setNodeDraggingLocked}
+                  graphRef={graphRef}
+                  showCloseButton
+                  onClose={() => setShowMobileControls(false)}
+                />
+              </div>
+            )}
             <button
               onClick={() => setFocusMode(!focusMode)}
               title={focusMode ? 'Exit focus mode' : 'Enter focus mode - click nodes to explore'}
@@ -1916,7 +2203,7 @@ export default function App() {
             </button>
           </GlassCard>
 
-          <div className={`space-y-5 md:col-span-2 2xl:col-span-1 ${pageLoadComplete ? 'animate-sidebar-enter' : ''} ${isMobileView && mobileTab !== 'export' ? 'hidden' : ''}`}>
+          <div className={`grid grid-cols-1 gap-5 sm:grid-cols-2 md:col-span-2 2xl:col-span-1 2xl:grid-cols-1 ${pageLoadComplete ? 'animate-sidebar-enter' : ''} ${isMobileView && mobileTab !== 'export' ? 'hidden' : ''}`}>
             <GlassCard className="p-4">
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Relationship Explorer</h3>
@@ -1980,11 +2267,201 @@ export default function App() {
                 </div>
               )}
             </GlassCard>
+
+            <GlassCard className="p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Time Travel Playback</h3>
+                <button
+                  onClick={() => setIsPlaybackRunning((prev) => !prev)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                >
+                  {isPlaybackRunning ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                  {isPlaybackRunning ? 'Pause' : 'Play'}
+                </button>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={maxChunkIndex}
+                value={timeTravelChunk}
+                onChange={(e) => setTimeTravelChunk(Number(e.target.value))}
+                className="w-full"
+              />
+              <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-300">
+                <span>Chunk {timeTravelChunk}</span>
+                <button
+                  onClick={() => {
+                    setTimeTravelChunk(1);
+                    setIsPlaybackRunning(false);
+                  }}
+                  className="font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
+                >
+                  Reset
+                </button>
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-4">
+              <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Comparison Mode</h3>
+              <div className="space-y-2">
+                <select
+                  value={comparisonSelection.a}
+                  onChange={(e) => setComparisonSelection((prev) => ({ ...prev, a: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="">Select Entity A</option>
+                  {selectableNodesForControls.map((n) => (
+                    <option key={`cmp-a-${n.id}`} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={comparisonSelection.b}
+                  onChange={(e) => setComparisonSelection((prev) => ({ ...prev, b: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="">Select Entity B</option>
+                  {selectableNodesForControls.map((n) => (
+                    <option key={`cmp-b-${n.id}`} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+              </div>
+              {comparisonData && (
+                <div className="mt-3 space-y-2 text-xs">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800/60">
+                    <p className="font-semibold text-slate-700 dark:text-slate-100">Shared neighbors: {comparisonData.sharedCount}</p>
+                    <p className="mt-1 text-slate-500 dark:text-slate-300">{comparisonData.a.name} unique: {comparisonData.uniqueA.length}</p>
+                    <p className="text-slate-500 dark:text-slate-300">{comparisonData.b.name} unique: {comparisonData.uniqueB.length}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      highlightNodeInGraph(comparisonData.a.id);
+                      setSelectedEntity(comparisonData.a);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                  >
+                    <GitCompare className="h-3.5 w-3.5" /> Jump to A
+                  </button>
+                </div>
+              )}
+            </GlassCard>
+
+            <GlassCard className="p-4">
+              <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Contradiction Path Finder</h3>
+              <div className="space-y-2">
+                <select
+                  value={selectedContradictionPath.aId}
+                  onChange={(e) => setSelectedContradictionPath((prev) => ({ ...prev, aId: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="">Start entity</option>
+                  {selectableNodesForControls.map((n) => (
+                    <option key={`path-a-${n.id}`} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={selectedContradictionPath.bId}
+                  onChange={(e) => setSelectedContradictionPath((prev) => ({ ...prev, bId: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="">End entity</option>
+                  {selectableNodesForControls.map((n) => (
+                    <option key={`path-b-${n.id}`} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+                {contradictionPath.length === 0 ? (
+                  <p className="text-slate-500 dark:text-slate-300">Select two entities to compute the shortest contradiction path.</p>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="font-semibold text-slate-700 dark:text-slate-100">Path length: {contradictionPath.length - 1} hops</p>
+                    <p className="text-slate-500 dark:text-slate-300">Animated steps: {Math.min(pathAnimationStep, contradictionPath.length)}/{contradictionPath.length}</p>
+                    <p className="flex items-center gap-1 text-cyan-700 dark:text-cyan-300">
+                      <Route className="h-3.5 w-3.5" /> {contradictionPath.map((id) => nodeMap.get(id)?.name || id).join(' → ')}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-4">
+              <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Smart Suggestions</h3>
+              <div className="space-y-2 text-xs">
+                {smartSuggestions.map((item) => (
+                  <div key={item} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                    <p className="flex items-start gap-1.5"><Wand2 className="mt-0.5 h-3.5 w-3.5 text-cyan-600 dark:text-cyan-300" /> {item}</p>
+                  </div>
+                ))}
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-4">
+              <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Collaboration Tools</h3>
+              <div className="space-y-2">
+                <select
+                  value={selectedEntity?.id || ''}
+                  onChange={(e) => {
+                    const next = nodeMap.get(e.target.value);
+                    if (next) setSelectedEntity(next);
+                  }}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="">Pick entity for note</option>
+                  {selectableNodesForControls.map((n) => (
+                    <option key={`note-${n.id}`} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+
+                <textarea
+                  value={selectedEntity ? nodeNotes[selectedEntity.id] || '' : ''}
+                  onChange={(e) => selectedEntity && updateNodeNote(selectedEntity.id, e.target.value)}
+                  placeholder="Add sticky note for selected entity"
+                  rows={3}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                />
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    onClick={saveCurrentView}
+                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                  >
+                    <Save className="h-3.5 w-3.5" /> Save View
+                  </button>
+                  <button
+                    onClick={exportSelectedSubgraph}
+                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Export Subgraph
+                  </button>
+                </div>
+
+                {savedViews.length > 0 && (
+                  <div className="max-h-28 space-y-1 overflow-auto pr-1">
+                    {savedViews.map((view) => (
+                      <div key={view.id} className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 dark:border-slate-700">
+                        <button
+                          onClick={() => applySavedView(view)}
+                          className="flex-1 truncate text-left text-[11px] font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
+                        >
+                          {view.label}
+                        </button>
+                        <button
+                          onClick={() => deleteSavedView(view.id)}
+                          className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-900/40 dark:text-rose-200"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </GlassCard>
           </div>
         </div>
 
-        <div className={`mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-3 ${isMobileView && mobileTab !== 'stats' ? 'hidden' : ''}`}>
-          <MemoChartShell title="Entity Type Distribution">
+        <div className={`mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-6 ${isMobileView && mobileTab !== 'stats' ? 'hidden' : ''}`}>
+          <MemoChartShell title="Entity Type Distribution" className="lg:col-span-1 2xl:col-span-2">
             <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
@@ -2045,7 +2522,7 @@ export default function App() {
             </LazyRender>
           </MemoChartShell>
 
-          <MemoChartShell title="Relationship Type Bar Chart">
+          <MemoChartShell title="Relationship Type Bar Chart" className="lg:col-span-1 2xl:col-span-2">
             <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
@@ -2104,7 +2581,7 @@ export default function App() {
             </LazyRender>
           </MemoChartShell>
 
-          <MemoChartShell title="Timeline View (Date Entities)">
+          <MemoChartShell title="Timeline View (Date Entities)" className="lg:col-span-1 2xl:col-span-2">
             <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
@@ -2129,7 +2606,7 @@ export default function App() {
             </LazyRender>
           </MemoChartShell>
 
-          <MemoChartShell title="Top Connected Entities">
+          <MemoChartShell title="Top Connected Entities" className="lg:col-span-1 2xl:col-span-2">
             <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
@@ -2183,7 +2660,7 @@ export default function App() {
             </LazyRender>
           </MemoChartShell>
 
-          <GlassCard className="p-4">
+          <GlassCard className="p-4 lg:col-span-2 2xl:col-span-4">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-base font-bold">Network Density Heatmap</h3>
               {heatmapSelection && (
@@ -2235,7 +2712,14 @@ export default function App() {
                               }`}
                               style={{
                                 backgroundColor: `rgba(8,145,178,${0.12 + intensity * 0.78})`,
-                                color: intensity > 0.5 ? '#ffffff' : '#0f172a',
+                                color:
+                                  theme === 'dark'
+                                    ? intensity > 0.28
+                                      ? '#f8fafc'
+                                      : '#e2e8f0'
+                                    : intensity > 0.5
+                                      ? '#ffffff'
+                                      : '#0f172a',
                               }}
                               title={`${rowType} -> ${colType}: ${value} connections`}
                             >
@@ -2662,20 +3146,6 @@ export default function App() {
         />
       )}
 
-      {/* === NEW: Graph Controls Panel (1D) === */}
-      <GraphControlsPanel
-        physicsEnabled={physicsEnabled}
-        setPhysicsEnabled={setPhysicsEnabled}
-        labelsAlwaysVisible={labelsAlwaysVisible}
-        setLabelsAlwaysVisible={setLabelsAlwaysVisible}
-        edgeLabelsVisible={edgeLabelsVisible}
-        setEdgeLabelsVisible={setEdgeLabelsVisible}
-        nodeDraggingLocked={nodeDraggingLocked}
-        setNodeDraggingLocked={setNodeDraggingLocked}
-        graphRef={graphRef}
-        isMobileView={isMobileView}
-        showMobileControls={showMobileControls}
-      />
     </div>
   );
 }
