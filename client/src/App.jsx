@@ -3,8 +3,12 @@ import ForceGraph2D from 'react-force-graph-2d';
 import {
   AlertCircle,
   BarChart3,
+  Building2,
+  CalendarDays,
   Download,
   Filter,
+  File,
+  FileText,
   Link2,
   Moon,
   RefreshCw,
@@ -21,6 +25,8 @@ import {
   Eye,
   Tag,
   Expand,
+  Briefcase,
+  HelpCircle,
 } from 'lucide-react';
 import {
   Bar,
@@ -32,6 +38,7 @@ import {
   ResponsiveContainer,
   Scatter,
   ScatterChart,
+  Sector,
   Tooltip,
   XAxis,
   YAxis,
@@ -114,6 +121,66 @@ function getSecondDegreeConnections(nodeId, linksWithMetadata) {
   firstDegree.forEach((id) => secondDegree.delete(id));
   secondDegree.delete(nodeId);
   return secondDegree;
+}
+
+function relationshipSeverityColor(type) {
+  const rel = String(type || '').toUpperCase();
+  if (rel.includes('CONTRADICT')) return '#dc2626';
+  if (rel.includes('SUPERSEDE') || rel.includes('OVERRIDE')) return '#ea580c';
+  if (rel.includes('OBLIGAT')) return '#0891b2';
+  return '#0d9488';
+}
+
+function getEntityTypeIcon(type) {
+  switch (type) {
+    case 'Party':
+      return Building2;
+    case 'Clause':
+      return FileText;
+    case 'Date':
+      return CalendarDays;
+    case 'Document':
+      return File;
+    case 'Obligation':
+      return Briefcase;
+    default:
+      return HelpCircle;
+  }
+}
+
+function renderActivePieShape(props) {
+  const {
+    cx,
+    cy,
+    innerRadius,
+    outerRadius,
+    startAngle,
+    endAngle,
+    fill,
+    payload,
+    percent,
+    value,
+  } = props;
+
+  return (
+    <g>
+      <text x={cx} y={cy - 4} dy={8} textAnchor="middle" fill="#0f172a" className="dark:fill-slate-100" fontSize={12} fontWeight={700}>
+        {payload?.name}
+      </text>
+      <text x={cx} y={cy + 14} dy={8} textAnchor="middle" fill="#475569" fontSize={11}>
+        {value} ({(percent * 100).toFixed(1)}%)
+      </text>
+      <Sector
+        cx={cx}
+        cy={cy}
+        innerRadius={innerRadius}
+        outerRadius={outerRadius + 10}
+        startAngle={startAngle}
+        endAngle={endAngle}
+        fill={fill}
+      />
+    </g>
+  );
 }
 
 function GlassCard({ children, className = '' }) {
@@ -377,6 +444,12 @@ export default function App() {
   const [statsPulse, setStatsPulse] = useState({});
   const filterButtonRef = useRef(null);
 
+  // === NEW: Task 3 - Enhanced Data Visualizations ===
+  const [pieActiveIndex, setPieActiveIndex] = useState(-1);
+  const [hiddenEntityTypes, setHiddenEntityTypes] = useState(new Set());
+  const [selectedRelationshipType, setSelectedRelationshipType] = useState('');
+  const [heatmapSelection, setHeatmapSelection] = useState(null);
+
   const pushToast = (type, message) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [...prev, { id, type, message }]);
@@ -520,19 +593,54 @@ export default function App() {
     return map;
   }, [nodes, linksWithMetadata]);
 
-  const filteredNodes = useMemo(() => {
+  const baseFilteredNodes = useMemo(() => {
     return nodes.filter((n) => {
       const matchesFilter = activeFilter === 'All' || n.type === activeFilter;
       const matchesSearch = n.name.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesFilter && matchesSearch;
+      const visibleInLegend = !hiddenEntityTypes.has(n.type);
+      return matchesFilter && matchesSearch && visibleInLegend;
     });
-  }, [nodes, activeFilter, searchQuery]);
+  }, [nodes, activeFilter, searchQuery, hiddenEntityTypes]);
 
-  const filteredNodeIds = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes]);
+  const baseFilteredNodeIds = useMemo(() => new Set(baseFilteredNodes.map((n) => n.id)), [baseFilteredNodes]);
 
   const filteredLinks = useMemo(() => {
-    return linksWithMetadata.filter((l) => filteredNodeIds.has(l.sourceId) && filteredNodeIds.has(l.targetId));
-  }, [linksWithMetadata, filteredNodeIds]);
+    return linksWithMetadata.filter((l) => {
+      if (!baseFilteredNodeIds.has(l.sourceId) || !baseFilteredNodeIds.has(l.targetId)) {
+        return false;
+      }
+
+      if (selectedRelationshipType && l.type !== selectedRelationshipType) {
+        return false;
+      }
+
+      if (heatmapSelection) {
+        const sourceType = nodeMap.get(l.sourceId)?.type;
+        const targetType = nodeMap.get(l.targetId)?.type;
+        const sameDirection = sourceType === heatmapSelection.sourceType && targetType === heatmapSelection.targetType;
+        const reverseDirection = sourceType === heatmapSelection.targetType && targetType === heatmapSelection.sourceType;
+        if (!sameDirection && !reverseDirection) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [linksWithMetadata, baseFilteredNodeIds, selectedRelationshipType, heatmapSelection, nodeMap]);
+
+  const filteredNodes = useMemo(() => {
+    const hasLinkDrivenFilter = Boolean(selectedRelationshipType || heatmapSelection);
+    if (!hasLinkDrivenFilter) {
+      return baseFilteredNodes;
+    }
+
+    const ids = new Set();
+    filteredLinks.forEach((l) => {
+      ids.add(l.sourceId);
+      ids.add(l.targetId);
+    });
+    return baseFilteredNodes.filter((n) => ids.has(n.id));
+  }, [baseFilteredNodes, filteredLinks, selectedRelationshipType, heatmapSelection]);
 
   const graphData = useMemo(() => ({ nodes: filteredNodes, links: filteredLinks }), [filteredNodes, filteredLinks]);
 
@@ -554,9 +662,29 @@ export default function App() {
     linksWithMetadata.forEach((l) => counts.set(l.type, (counts.get(l.type) ?? 0) + 1));
     return Array.from(counts.entries())
       .map(([type, count]) => ({ type, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
+      .sort((a, b) => b.count - a.count);
   }, [linksWithMetadata]);
+
+  const pieDistribution = useMemo(() => {
+    return entityDistribution.filter((entry) => !hiddenEntityTypes.has(entry.name));
+  }, [entityDistribution, hiddenEntityTypes]);
+
+  const drilldownEntities = useMemo(() => {
+    if (!selectedRelationshipType) {
+      return [];
+    }
+    const ids = new Set();
+    linksWithMetadata
+      .filter((l) => l.type === selectedRelationshipType)
+      .forEach((l) => {
+        ids.add(l.sourceId);
+        ids.add(l.targetId);
+      });
+    return Array.from(ids)
+      .map((id) => nodeMap.get(id))
+      .filter(Boolean)
+      .slice(0, 24);
+  }, [selectedRelationshipType, linksWithMetadata, nodeMap]);
 
   const timelineData = useMemo(() => {
     const parseDateValue = (text) => {
@@ -589,10 +717,25 @@ export default function App() {
 
   const topConnectedEntities = useMemo(() => {
     return nodes
-      .map((n) => ({ name: n.name, connections: degreeMap.get(n.id) ?? 0, id: n.id }))
+      .map((n) => ({ name: n.name, connections: degreeMap.get(n.id) ?? 0, id: n.id, type: n.type }))
       .sort((a, b) => b.connections - a.connections)
       .slice(0, 8);
   }, [nodes, degreeMap]);
+
+  const heatmapData = useMemo(() => {
+    const types = [...new Set(nodes.map((n) => n.type))].sort();
+    const map = new Map();
+
+    linksWithMetadata.forEach((l) => {
+      const sourceType = nodeMap.get(l.sourceId)?.type || 'Unknown';
+      const targetType = nodeMap.get(l.targetId)?.type || 'Unknown';
+      const key = `${sourceType}::${targetType}`;
+      map.set(key, (map.get(key) ?? 0) + 1);
+    });
+
+    const max = Math.max(1, ...Array.from(map.values()));
+    return { types, map, max };
+  }, [nodes, linksWithMetadata, nodeMap]);
 
   const selectedEntityConnections = useMemo(() => {
     if (!selectedEntity) {
@@ -652,6 +795,48 @@ export default function App() {
     setSelectedRelationship({ ...link, sourceId, targetId });
     setSelectedEntity(null);
     setHighlightedNodeIds([sourceId, targetId]);
+  };
+
+  const onPieSliceClick = (entry) => {
+    if (!entry?.name) {
+      return;
+    }
+    setActiveFilter(entry.name);
+    setSelectedRelationshipType('');
+    setHeatmapSelection(null);
+    pushToast('success', `Filtered graph to ${entry.name}`);
+  };
+
+  const togglePieLegendType = (type) => {
+    setHiddenEntityTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) {
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  };
+
+  const onRelationshipBarClick = (data) => {
+    const relationshipType = data?.type || data?.payload?.type;
+    if (!relationshipType) {
+      return;
+    }
+    setSelectedRelationshipType((prev) => (prev === relationshipType ? '' : relationshipType));
+    setHeatmapSelection(null);
+  };
+
+  const onHeatmapCellClick = (sourceType, targetType) => {
+    const next = { sourceType, targetType };
+    const sameSelection =
+      heatmapSelection?.sourceType === sourceType && heatmapSelection?.targetType === targetType;
+    setHeatmapSelection(sameSelection ? null : next);
+    if (!sameSelection) {
+      setSelectedRelationshipType('');
+      pushToast('success', `Showing ${sourceType} ↔ ${targetType} connections`);
+    }
   };
 
   // === NEW: Node Hover Handler (1A) ===
@@ -1110,19 +1295,59 @@ export default function App() {
             <div className="h-72">
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
-              ) : entityDistribution.length === 0 ? (
+              ) : pieDistribution.length === 0 ? (
                 <EmptyBlock icon={Users} title="No entity distribution" subtitle="This chart appears once entity data is loaded." />
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={entityDistribution} dataKey="value" nameKey="name" outerRadius={88} label>
-                      {entityDistribution.map((entry) => (
-                        <Cell key={entry.name} fill={ENTITY_COLORS[entry.name] || ENTITY_COLORS.Unknown} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
+                <div className="h-full space-y-3">
+                  <div className="h-52">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieDistribution}
+                          dataKey="value"
+                          nameKey="name"
+                          outerRadius={84}
+                          activeIndex={pieActiveIndex}
+                          activeShape={renderActivePieShape}
+                          onMouseEnter={(_, index) => setPieActiveIndex(index)}
+                          onMouseLeave={() => setPieActiveIndex(-1)}
+                          onClick={onPieSliceClick}
+                          cursor="pointer"
+                        >
+                          {pieDistribution.map((entry) => (
+                            <Cell key={entry.name} fill={ENTITY_COLORS[entry.name] || ENTITY_COLORS.Unknown} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(value, _name, payload) => {
+                            const total = pieDistribution.reduce((sum, item) => sum + item.value, 0);
+                            const pct = total ? ((Number(value) / total) * 100).toFixed(1) : '0.0';
+                            return [`${value} (${pct}%)`, payload?.payload?.name || 'Type'];
+                          }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {entityDistribution.map((entry) => {
+                      const hidden = hiddenEntityTypes.has(entry.name);
+                      return (
+                        <button
+                          key={entry.name}
+                          onClick={() => togglePieLegendType(entry.name)}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition ${
+                            hidden
+                              ? 'border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400'
+                              : 'border-slate-200 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200'
+                          }`}
+                        >
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: ENTITY_COLORS[entry.name] || ENTITY_COLORS.Unknown }} />
+                          {entry.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           </GlassCard>
@@ -1135,15 +1360,54 @@ export default function App() {
               ) : relationshipDistribution.length === 0 ? (
                 <EmptyBlock icon={BarChart3} title="No relationships found" subtitle="Relationship bars will appear when links exist." />
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={relationshipDistribution} margin={{ left: 0, right: 16 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="type" tick={{ fontSize: 11 }} interval={0} angle={-15} height={54} textAnchor="end" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#0891b2" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="h-full space-y-3">
+                  <div className="h-44 overflow-x-auto">
+                    <div style={{ minWidth: `${Math.max(560, relationshipDistribution.length * 90)}px`, height: '100%' }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={relationshipDistribution} margin={{ left: 0, right: 16 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="type" tick={{ fontSize: 11 }} interval={0} angle={-15} height={54} textAnchor="end" />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar dataKey="count" radius={[8, 8, 0, 0]} onClick={onRelationshipBarClick} cursor="pointer">
+                            {relationshipDistribution.map((entry) => (
+                              <Cell
+                                key={entry.type}
+                                fill={selectedRelationshipType && selectedRelationshipType !== entry.type ? '#94a3b8' : relationshipSeverityColor(entry.type)}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  {selectedRelationshipType && (
+                    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          {selectedRelationshipType} Entities ({drilldownEntities.length})
+                        </p>
+                        <button
+                          onClick={() => setSelectedRelationshipType('')}
+                          className="text-[11px] font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      <div className="max-h-20 overflow-auto pr-1 text-xs text-slate-600 dark:text-slate-300">
+                        {drilldownEntities.map((entity) => (
+                          <button
+                            key={entity.id}
+                            onClick={() => highlightNodeInGraph(entity.id)}
+                            className="mr-1 mb-1 rounded bg-slate-100 px-2 py-1 transition hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700"
+                          >
+                            {entity.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </GlassCard>
@@ -1180,15 +1444,115 @@ export default function App() {
               ) : topConnectedEntities.length === 0 ? (
                 <EmptyBlock icon={Users} title="No connectivity data" subtitle="Top nodes appear when graph links are available." />
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topConnectedEntities} layout="vertical" margin={{ left: 20, right: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" />
-                    <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Bar dataKey="connections" fill="#0d9488" radius={[0, 8, 8, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="h-full space-y-3">
+                  <div className="h-36">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={topConnectedEntities} layout="vertical" margin={{ left: 20, right: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" />
+                        <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Bar dataKey="connections" fill="#0d9488" radius={[0, 8, 8, 0]} onClick={(payload) => payload?.id && highlightNodeInGraph(payload.id)} cursor="pointer" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="max-h-28 space-y-1 overflow-auto pr-1">
+                    {topConnectedEntities.map((entity) => {
+                      const Icon = getEntityTypeIcon(entity.type);
+                      return (
+                        <div
+                          key={entity.id}
+                          className="group flex items-center justify-between rounded-lg border border-slate-200 px-2 py-1.5 text-xs transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                        >
+                          <button onClick={() => highlightNodeInGraph(entity.id)} className="flex items-center gap-2 text-left">
+                            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-700">
+                              <Icon className="h-3.5 w-3.5 text-slate-600 dark:text-slate-200" />
+                            </span>
+                            <span className="truncate font-semibold text-slate-700 dark:text-slate-100">{entity.name}</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              highlightNodeInGraph(entity.id);
+                              const fullEntity = nodeMap.get(entity.id);
+                              if (fullEntity) {
+                                setSelectedEntity(fullEntity);
+                              }
+                            }}
+                            className="rounded px-2 py-1 text-[10px] font-semibold text-cyan-700 opacity-0 transition group-hover:opacity-100 dark:text-cyan-300"
+                          >
+                            View Details
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-base font-bold">Network Density Heatmap</h3>
+              {heatmapSelection && (
+                <button
+                  onClick={() => setHeatmapSelection(null)}
+                  className="text-[11px] font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
+                >
+                  Clear Filter
+                </button>
+              )}
+            </div>
+            <div className="overflow-auto">
+              {heatmapData.types.length === 0 ? (
+                <EmptyBlock icon={BarChart3} title="No connectivity matrix" subtitle="Heatmap appears when entities and links are loaded." />
+              ) : (
+                <div
+                  className="grid gap-1"
+                  style={{
+                    gridTemplateColumns: `110px repeat(${heatmapData.types.length}, minmax(92px, 1fr))`,
+                  }}
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">From \ To</div>
+                  {heatmapData.types.map((type) => (
+                    <div key={`col-${type}`} className="px-1 text-center text-[10px] font-semibold text-slate-500">
+                      {type}
+                    </div>
+                  ))}
+
+                  {heatmapData.types.map((rowType) => (
+                    <div key={`row-${rowType}`} className="contents">
+                      <div key={`row-label-${rowType}`} className="px-1 py-2 text-[10px] font-semibold text-slate-500">
+                        {rowType}
+                      </div>
+                      {heatmapData.types.map((colType) => {
+                        const key = `${rowType}::${colType}`;
+                        const value = heatmapData.map.get(key) ?? 0;
+                        const intensity = value / heatmapData.max;
+                        const active =
+                          heatmapSelection?.sourceType === rowType && heatmapSelection?.targetType === colType;
+                        return (
+                          <button
+                            key={key}
+                            onClick={() => onHeatmapCellClick(rowType, colType)}
+                            className={`h-10 rounded border text-xs font-semibold transition ${
+                              active
+                                ? 'border-cyan-700 ring-2 ring-cyan-300 dark:ring-cyan-700'
+                                : 'border-slate-200 dark:border-slate-700'
+                            }`}
+                            style={{
+                              backgroundColor: `rgba(8,145,178,${0.12 + intensity * 0.78})`,
+                              color: intensity > 0.5 ? '#ffffff' : '#0f172a',
+                            }}
+                            title={`${rowType} -> ${colType}: ${value} connections`}
+                          >
+                            {value}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </GlassCard>
