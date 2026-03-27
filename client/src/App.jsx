@@ -426,9 +426,13 @@ function GraphControlsPanel({
   nodeDraggingLocked,
   setNodeDraggingLocked,
   graphRef,
+  isMobileView,
+  showMobileControls,
 }) {
   return (
-    <div className="pointer-events-auto fixed bottom-6 left-6 z-50 space-y-2 rounded-xl border border-slate-200 bg-white/90 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">
+    <div className={`pointer-events-auto fixed z-50 space-y-2 rounded-xl border border-slate-200 bg-white/90 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 ${
+      isMobileView ? `bottom-20 left-4 right-4 ${showMobileControls ? '' : 'hidden'}` : 'bottom-6 left-6'
+    }`}>
       <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Graph Controls</p>
       <div className="space-y-2">
         <button
@@ -500,6 +504,8 @@ function GraphControlsPanel({
 
 export default function App() {
   const graphRef = useRef(null);
+  const mainTouchRef = useRef(null);
+  const modalTouchRef = useRef(null);
 
   const [theme, setTheme] = useState('light');
   const [loading, setLoading] = useState(true);
@@ -567,6 +573,9 @@ export default function App() {
   const [heatmapSelection, setHeatmapSelection] = useState(null);
   const [graphViewBounds, setGraphViewBounds] = useState({ minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity });
   const [graphZoomLevel, setGraphZoomLevel] = useState(1);
+  const [isMobileView, setIsMobileView] = useState(false);
+  const [mobileTab, setMobileTab] = useState('graph');
+  const [showMobileControls, setShowMobileControls] = useState(false);
 
   const pushToast = (type, message) => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -585,6 +594,21 @@ export default function App() {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('lexgraph-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    const updateViewportMode = () => {
+      setIsMobileView(window.innerWidth < 768);
+    };
+    updateViewportMode();
+    window.addEventListener('resize', updateViewportMode);
+    return () => window.removeEventListener('resize', updateViewportMode);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView) {
+      setShowMobileControls(false);
+    }
+  }, [isMobileView]);
 
   useEffect(() => {
     setIsSearchDebouncing(true);
@@ -1186,6 +1210,57 @@ export default function App() {
     }
   };
 
+  const mobileTabs = ['graph', 'stats', 'export', 'search'];
+
+  const handleMainTouchStart = (event) => {
+    if (!isMobileView || !event.touches?.[0]) {
+      return;
+    }
+    const t = event.touches[0];
+    mainTouchRef.current = { x: t.clientX, y: t.clientY };
+  };
+
+  const handleMainTouchEnd = (event) => {
+    if (!isMobileView || !mainTouchRef.current || !event.changedTouches?.[0]) {
+      return;
+    }
+    const t = event.changedTouches[0];
+    const dx = t.clientX - mainTouchRef.current.x;
+    const dy = t.clientY - mainTouchRef.current.y;
+    mainTouchRef.current = null;
+    if (Math.abs(dx) < 70 || Math.abs(dy) > 50) {
+      return;
+    }
+    const index = mobileTabs.indexOf(mobileTab);
+    if (index === -1) {
+      return;
+    }
+    if (dx < 0 && index < mobileTabs.length - 1) {
+      setMobileTab(mobileTabs[index + 1]);
+    }
+    if (dx > 0 && index > 0) {
+      setMobileTab(mobileTabs[index - 1]);
+    }
+  };
+
+  const handleModalTouchStart = (event) => {
+    if (!event.touches?.[0]) {
+      return;
+    }
+    modalTouchRef.current = { y: event.touches[0].clientY };
+  };
+
+  const handleModalTouchEnd = (event) => {
+    if (!modalTouchRef.current || !event.changedTouches?.[0]) {
+      return;
+    }
+    const dy = event.changedTouches[0].clientY - modalTouchRef.current.y;
+    modalTouchRef.current = null;
+    if (dy > 90) {
+      setSelectedEntity(null);
+    }
+  };
+
   const addSearchHistory = (text) => {
     const value = String(text || '').trim();
     if (!value) {
@@ -1479,9 +1554,13 @@ export default function App() {
         </div>
       </header>
 
-      <main className="relative mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-          <GlassCard className={`p-4 xl:col-span-8 ${pageLoadComplete ? 'animate-graph-enter' : ''}`}>
+      <main
+        className="relative mx-auto w-full max-w-7xl px-4 py-6 pb-24 sm:px-6 lg:px-8 md:pb-6"
+        onTouchStart={handleMainTouchStart}
+        onTouchEnd={handleMainTouchEnd}
+      >
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-3">
+          <GlassCard className={`p-4 md:col-span-2 2xl:col-span-2 ${pageLoadComplete ? 'animate-graph-enter' : ''} ${isMobileView && mobileTab !== 'graph' && mobileTab !== 'search' ? 'hidden' : ''}`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold">Interactive Graph Explorer</h2>
@@ -1779,7 +1858,7 @@ export default function App() {
             </button>
           </GlassCard>
 
-          <div className={`space-y-5 xl:col-span-4 ${pageLoadComplete ? 'animate-sidebar-enter' : ''}`}>
+          <div className={`space-y-5 md:col-span-2 2xl:col-span-1 ${pageLoadComplete ? 'animate-sidebar-enter' : ''} ${isMobileView && mobileTab !== 'export' ? 'hidden' : ''}`}>
             <GlassCard className="p-4">
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Relationship Explorer</h3>
@@ -1846,7 +1925,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <div className={`mt-5 grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-3 ${isMobileView && mobileTab !== 'stats' ? 'hidden' : ''}`}>
           <MemoChartShell title="Entity Type Distribution">
             <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
@@ -2114,10 +2193,58 @@ export default function App() {
             </div>
           </GlassCard>
         </div>
+
+        {isMobileView && mobileTab === 'search' && (
+          <div className="mt-5">
+            <GlassCard className="p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-base font-bold">Search & Filters</h3>
+                <button
+                  onClick={openAdvancedSearch}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" /> Advanced
+                </button>
+              </div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search entities"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-9 py-2 text-sm outline-none ring-cyan-600 transition focus:ring-2 dark:border-slate-700 dark:bg-slate-900"
+                />
+              </div>
+              <div className="mt-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Recent</p>
+                <div className="flex flex-wrap gap-2">
+                  {searchHistory.length === 0 ? (
+                    <span className="text-xs text-slate-500">No recent searches</span>
+                  ) : (
+                    searchHistory.map((item) => (
+                      <button
+                        key={item}
+                        onClick={() => runSearchText(item)}
+                        className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold dark:border-slate-700 dark:bg-slate-900"
+                      >
+                        {item}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </GlassCard>
+          </div>
+        )}
       </main>
 
       {selectedEntity && (
-        <div className="fixed inset-0 z-[65] bg-slate-950/65 p-3 backdrop-blur-sm sm:p-5" onClick={() => setSelectedEntity(null)}>
+        <div
+          className="fixed inset-0 z-[65] bg-slate-950/65 p-3 backdrop-blur-sm sm:p-5"
+          onClick={() => setSelectedEntity(null)}
+          onTouchStart={handleModalTouchStart}
+          onTouchEnd={handleModalTouchEnd}
+        >
           <div
             onClick={(e) => e.stopPropagation()}
             className="entity-modal-enter mx-auto h-full w-full max-w-7xl overflow-hidden rounded-3xl border border-slate-200/70 bg-white/95 shadow-2xl dark:border-slate-700 dark:bg-slate-900/95"
@@ -2274,6 +2401,45 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isMobileView && (
+        <button
+          onClick={() => setShowMobileControls((prev) => !prev)}
+          className="fixed bottom-24 right-4 z-[56] inline-flex h-12 w-12 items-center justify-center rounded-full bg-cyan-700 text-white shadow-lg transition hover:bg-cyan-800 md:hidden"
+          title="Toggle graph controls"
+        >
+          <SlidersHorizontal className="h-5 w-5" />
+        </button>
+      )}
+
+      {isMobileView && (
+        <div className="fixed bottom-0 left-0 right-0 z-[55] border-t border-slate-200 bg-white/95 px-2 py-1.5 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 md:hidden">
+          <div className="grid grid-cols-4 gap-1">
+            {[
+              { key: 'graph', label: 'Graph', icon: Link2 },
+              { key: 'stats', label: 'Stats', icon: BarChart3 },
+              { key: 'export', label: 'Export', icon: Download },
+              { key: 'search', label: 'Search', icon: Search },
+            ].map((tab) => {
+              const active = mobileTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setMobileTab(tab.key)}
+                  className={`flex flex-col items-center justify-center rounded-lg px-1 py-1 text-[10px] font-semibold transition ${
+                    active
+                      ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200'
+                      : 'text-slate-500 dark:text-slate-300'
+                  }`}
+                >
+                  <tab.icon className="mb-0.5 h-4 w-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -2449,6 +2615,8 @@ export default function App() {
         nodeDraggingLocked={nodeDraggingLocked}
         setNodeDraggingLocked={setNodeDraggingLocked}
         graphRef={graphRef}
+        isMobileView={isMobileView}
+        showMobileControls={showMobileControls}
       />
     </div>
   );
