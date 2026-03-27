@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import {
   AlertCircle,
@@ -247,6 +247,59 @@ function EmptyBlock({ icon: Icon, title, subtitle }) {
   );
 }
 
+const MemoStatCard = memo(function MemoStatCard({ card, idx, pageLoadComplete, loading, pulse }) {
+  return (
+    <div
+      className={`stat-card stat-card-${idx} rounded-xl border border-white/25 bg-white/10 px-3 py-3 backdrop-blur transition-all duration-300 ${
+        pageLoadComplete ? 'animate-stat-card-enter' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-100">{card.label}</p>
+        <card.icon className={`h-4 w-4 text-cyan-50 ${pulse ? 'animate-icon-bounce' : ''}`} />
+      </div>
+      <p className="stat-card-number mt-2 text-2xl font-bold">{loading ? 0 : card.value}</p>
+    </div>
+  );
+});
+
+const MemoChartShell = memo(function MemoChartShell({ title, children }) {
+  return (
+    <GlassCard className="p-4">
+      <h3 className="mb-3 text-base font-bold">{title}</h3>
+      <div className="h-72">{children}</div>
+    </GlassCard>
+  );
+});
+
+const MemoForceGraph2D = memo(function MemoForceGraph2D(props) {
+  return <ForceGraph2D {...props} />;
+});
+
+function LazyRender({ placeholder, children }) {
+  const anchorRef = useRef(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    if (!anchorRef.current || isVisible) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '120px' }
+    );
+    observer.observe(anchorRef.current);
+    return () => observer.disconnect();
+  }, [isVisible]);
+
+  return <div ref={anchorRef} className="h-full">{isVisible ? children : placeholder}</div>;
+}
+
 // === NEW: Node Hover Tooltip Component ===
 function NodeHoverTooltip({ node, mouseX, mouseY, connectionCount, connectedNames }) {
   if (!node) return null;
@@ -459,6 +512,8 @@ export default function App() {
   const [contradictions, setContradictions] = useState([]);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [isSearchDebouncing, setIsSearchDebouncing] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [autocompleteIndex, setAutocompleteIndex] = useState(-1);
@@ -510,6 +565,8 @@ export default function App() {
   const [hiddenEntityTypes, setHiddenEntityTypes] = useState(new Set());
   const [selectedRelationshipType, setSelectedRelationshipType] = useState('');
   const [heatmapSelection, setHeatmapSelection] = useState(null);
+  const [graphViewBounds, setGraphViewBounds] = useState({ minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity });
+  const [graphZoomLevel, setGraphZoomLevel] = useState(1);
 
   const pushToast = (type, message) => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -528,6 +585,15 @@ export default function App() {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('lexgraph-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    setIsSearchDebouncing(true);
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+      setIsSearchDebouncing(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   useEffect(() => {
     try {
@@ -685,7 +751,7 @@ export default function App() {
     const toTs = advancedFilters.dateTo ? Date.parse(advancedFilters.dateTo) : Number.NaN;
     return nodes.filter((n) => {
       const matchesFilter = activeFilter === 'All' || n.type === activeFilter;
-      const q = searchQuery.toLowerCase();
+      const q = debouncedSearchQuery.toLowerCase();
       const matchesSearch = n.name.toLowerCase().includes(q) || n.description.toLowerCase().includes(q);
       const visibleInLegend = !hiddenEntityTypes.has(n.type);
       let matchesDateRange = true;
@@ -701,7 +767,7 @@ export default function App() {
       }
       return matchesFilter && matchesSearch && visibleInLegend && matchesDateRange;
     });
-  }, [nodes, activeFilter, searchQuery, hiddenEntityTypes, advancedFilters.dateFrom, advancedFilters.dateTo]);
+  }, [nodes, activeFilter, debouncedSearchQuery, hiddenEntityTypes, advancedFilters.dateFrom, advancedFilters.dateTo]);
 
   const baseFilteredNodeIds = useMemo(() => new Set(baseFilteredNodes.map((n) => n.id)), [baseFilteredNodes]);
 
@@ -983,6 +1049,61 @@ export default function App() {
     const target = nodeMap.get(selectedRelationship.targetId ?? getLinkNodeId(selectedRelationship.target));
     return { source, target };
   }, [selectedRelationship, nodeMap]);
+
+  const updateGraphBounds = useCallback(() => {
+    const graph = graphRef.current;
+    if (!graph || !graph.screen2GraphCoords) {
+      return;
+    }
+    const width = graph.width?.() ?? 1200;
+    const height = graph.height?.() ?? 520;
+    const topLeft = graph.screen2GraphCoords(0, 0);
+    const bottomRight = graph.screen2GraphCoords(width, height);
+    if (!topLeft || !bottomRight) {
+      return;
+    }
+    const marginX = Math.abs(bottomRight.x - topLeft.x) * 0.25;
+    const marginY = Math.abs(bottomRight.y - topLeft.y) * 0.25;
+    setGraphViewBounds({
+      minX: Math.min(topLeft.x, bottomRight.x) - marginX,
+      maxX: Math.max(topLeft.x, bottomRight.x) + marginX,
+      minY: Math.min(topLeft.y, bottomRight.y) - marginY,
+      maxY: Math.max(topLeft.y, bottomRight.y) + marginY,
+    });
+  }, []);
+
+  const isNodeVisible = useCallback(
+    (node) => {
+      if (filteredNodes.length < 450) {
+        return true;
+      }
+      if (!Number.isFinite(node?.x) || !Number.isFinite(node?.y)) {
+        return true;
+      }
+      return (
+        node.x >= graphViewBounds.minX &&
+        node.x <= graphViewBounds.maxX &&
+        node.y >= graphViewBounds.minY &&
+        node.y <= graphViewBounds.maxY
+      );
+    },
+    [filteredNodes.length, graphViewBounds]
+  );
+
+  const isLinkVisible = useCallback(
+    (link) => {
+      if (filteredLinks.length < 700) {
+        return true;
+      }
+      const s = typeof link.source === 'object' ? link.source : nodeMap.get(getLinkNodeId(link.source));
+      const t = typeof link.target === 'object' ? link.target : nodeMap.get(getLinkNodeId(link.target));
+      if (!s || !t) {
+        return false;
+      }
+      return isNodeVisible(s) || isNodeVisible(t);
+    },
+    [filteredLinks.length, nodeMap, isNodeVisible]
+  );
 
   const highlightNodeInGraph = (nodeId) => {
     const target = nodes.find((n) => n.id === nodeId);
@@ -1345,18 +1466,14 @@ export default function App() {
             {loading && nodes.length === 0
               ? [...Array(4)].map((_, i) => <SkeletonStatCard key={i} />)
               : statCards.map((card, idx) => (
-                  <div
+                  <MemoStatCard
                     key={card.label}
-                    className={`stat-card stat-card-${idx} rounded-xl border border-white/25 bg-white/10 px-3 py-3 backdrop-blur transition-all duration-300 ${
-                      pageLoadComplete ? 'animate-stat-card-enter' : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-100">{card.label}</p>
-                      <card.icon className={`h-4 w-4 text-cyan-50 ${statsPulse[card.label] ? 'animate-icon-bounce' : ''}`} />
-                    </div>
-                    <p className="stat-card-number mt-2 text-2xl font-bold">{card.value}</p>
-                  </div>
+                    card={card}
+                    idx={idx}
+                    pageLoadComplete={pageLoadComplete}
+                    loading={loading}
+                    pulse={statsPulse[card.label]}
+                  />
                 ))}
           </div>
         </div>
@@ -1407,6 +1524,7 @@ export default function App() {
                   onClick={openAdvancedSearch}
                   className="absolute right-2 top-1.5 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
+                  {isSearchDebouncing && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
                   <SlidersHorizontal className="h-3.5 w-3.5" />
                   Advanced
                 </button>
@@ -1545,15 +1663,23 @@ export default function App() {
                 <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
               ) : (
                 <div onMouseMove={handleGraphMouseMove}>
-                  <ForceGraph2D
+                  <MemoForceGraph2D
                     ref={graphRef}
                     graphData={graphData}
-                    nodeLabel={labelsAlwaysVisible ? (node) => `${node.name} (${node.type})` : () => ''}
-                    linkLabel={edgeLabelsVisible ? (link) => `${link.type}${link.reason ? `: ${link.reason}` : ''}` : () => ''}
+                    nodeLabel={labelsAlwaysVisible || graphZoomLevel > 1.6 ? (node) => `${node.name} (${node.type})` : () => ''}
+                    linkLabel={edgeLabelsVisible || (graphZoomLevel > 2.2 && filteredLinks.length < 600) ? (link) => `${link.type}${link.reason ? `: ${link.reason}` : ''}` : () => ''}
                     onNodeClick={onNodeClick}
                     onLinkClick={onLinkClick}
                     onNodeHover={onNodeHover}
                     onLinkHover={onLinkHover}
+                    onZoomEnd={({ k }) => {
+                      setGraphZoomLevel(k ?? 1);
+                      updateGraphBounds();
+                    }}
+                    onEngineStop={updateGraphBounds}
+                    onNodeDragEnd={updateGraphBounds}
+                    nodeVisibility={isNodeVisible}
+                    linkVisibility={isLinkVisible}
                     nodeColor={(node) => {
                       // === 1B: Click-to-Focus Mode - dim other nodes ===
                       if (focusMode && highlightedNodeIds.length > 0) {
@@ -1721,15 +1847,14 @@ export default function App() {
         </div>
 
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
-          <GlassCard className="p-4">
-            <h3 className="mb-3 text-base font-bold">Entity Type Distribution</h3>
-            <div className="h-72">
+          <MemoChartShell title="Entity Type Distribution">
+            <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
               ) : pieDistribution.length === 0 ? (
                 <EmptyBlock icon={Users} title="No entity distribution" subtitle="This chart appears once entity data is loaded." />
               ) : (
-                <div className="h-full space-y-3">
+                <div className="h-72 space-y-3">
                   <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -1780,18 +1905,17 @@ export default function App() {
                   </div>
                 </div>
               )}
-            </div>
-          </GlassCard>
+            </LazyRender>
+          </MemoChartShell>
 
-          <GlassCard className="p-4">
-            <h3 className="mb-3 text-base font-bold">Relationship Type Bar Chart</h3>
-            <div className="h-72">
+          <MemoChartShell title="Relationship Type Bar Chart">
+            <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
               ) : relationshipDistribution.length === 0 ? (
                 <EmptyBlock icon={BarChart3} title="No relationships found" subtitle="Relationship bars will appear when links exist." />
               ) : (
-                <div className="h-full space-y-3">
+                <div className="h-72 space-y-3">
                   <div className="h-44 overflow-x-auto">
                     <div style={{ minWidth: `${Math.max(560, relationshipDistribution.length * 90)}px`, height: '100%' }}>
                       <ResponsiveContainer width="100%" height="100%">
@@ -1840,42 +1964,42 @@ export default function App() {
                   )}
                 </div>
               )}
-            </div>
-          </GlassCard>
+            </LazyRender>
+          </MemoChartShell>
 
-          <GlassCard className="p-4">
-            <h3 className="mb-3 text-base font-bold">Timeline View (Date Entities)</h3>
-            <div className="h-72">
+          <MemoChartShell title="Timeline View (Date Entities)">
+            <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
               ) : timelineData.length === 0 ? (
                 <EmptyBlock icon={AlertCircle} title="No date entities detected" subtitle="Timeline needs entities of type Date." />
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart margin={{ top: 20, right: 20, bottom: 10, left: 10 }}>
-                    <CartesianGrid />
-                    <XAxis type="number" dataKey="ts" domain={['dataMin', 'dataMax']} tickFormatter={(v) => new Date(v).getFullYear()} />
-                    <YAxis type="number" dataKey="index" hide domain={[0, timelineData.length + 1]} />
-                    <Tooltip
-                      formatter={(value, name) => (name === 'ts' ? [new Date(value).toISOString().slice(0, 10), 'Date'] : [value, name])}
-                      labelFormatter={(_, payload) => payload?.[0]?.payload?.name || ''}
-                    />
-                    <Scatter data={timelineData.map((d, idx) => ({ ...d, index: idx + 1 }))} fill="#d97706" />
-                  </ScatterChart>
-                </ResponsiveContainer>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart margin={{ top: 20, right: 20, bottom: 10, left: 10 }}>
+                      <CartesianGrid />
+                      <XAxis type="number" dataKey="ts" domain={['dataMin', 'dataMax']} tickFormatter={(v) => new Date(v).getFullYear()} />
+                      <YAxis type="number" dataKey="index" hide domain={[0, timelineData.length + 1]} />
+                      <Tooltip
+                        formatter={(value, name) => (name === 'ts' ? [new Date(value).toISOString().slice(0, 10), 'Date'] : [value, name])}
+                        labelFormatter={(_, payload) => payload?.[0]?.payload?.name || ''}
+                      />
+                      <Scatter data={timelineData.map((d, idx) => ({ ...d, index: idx + 1 }))} fill="#d97706" />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                </div>
               )}
-            </div>
-          </GlassCard>
+            </LazyRender>
+          </MemoChartShell>
 
-          <GlassCard className="p-4">
-            <h3 className="mb-3 text-base font-bold">Top Connected Entities</h3>
-            <div className="h-72">
+          <MemoChartShell title="Top Connected Entities">
+            <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
                 <SkeletonChartArea />
               ) : topConnectedEntities.length === 0 ? (
                 <EmptyBlock icon={Users} title="No connectivity data" subtitle="Top nodes appear when graph links are available." />
               ) : (
-                <div className="h-full space-y-3">
+                <div className="h-72 space-y-3">
                   <div className="h-36">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={topConnectedEntities} layout="vertical" margin={{ left: 20, right: 10 }}>
@@ -1919,8 +2043,8 @@ export default function App() {
                   </div>
                 </div>
               )}
-            </div>
-          </GlassCard>
+            </LazyRender>
+          </MemoChartShell>
 
           <GlassCard className="p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -1935,56 +2059,58 @@ export default function App() {
               )}
             </div>
             <div className="overflow-auto">
-              {heatmapData.types.length === 0 ? (
-                <EmptyBlock icon={BarChart3} title="No connectivity matrix" subtitle="Heatmap appears when entities and links are loaded." />
-              ) : (
-                <div
-                  className="grid gap-1"
-                  style={{
-                    gridTemplateColumns: `110px repeat(${heatmapData.types.length}, minmax(92px, 1fr))`,
-                  }}
-                >
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">From \ To</div>
-                  {heatmapData.types.map((type) => (
-                    <div key={`col-${type}`} className="px-1 text-center text-[10px] font-semibold text-slate-500">
-                      {type}
-                    </div>
-                  ))}
-
-                  {heatmapData.types.map((rowType) => (
-                    <div key={`row-${rowType}`} className="contents">
-                      <div key={`row-label-${rowType}`} className="px-1 py-2 text-[10px] font-semibold text-slate-500">
-                        {rowType}
+              <LazyRender placeholder={<SkeletonChartArea />}>
+                {heatmapData.types.length === 0 ? (
+                  <EmptyBlock icon={BarChart3} title="No connectivity matrix" subtitle="Heatmap appears when entities and links are loaded." />
+                ) : (
+                  <div
+                    className="grid gap-1"
+                    style={{
+                      gridTemplateColumns: `110px repeat(${heatmapData.types.length}, minmax(92px, 1fr))`,
+                    }}
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">From \ To</div>
+                    {heatmapData.types.map((type) => (
+                      <div key={`col-${type}`} className="px-1 text-center text-[10px] font-semibold text-slate-500">
+                        {type}
                       </div>
-                      {heatmapData.types.map((colType) => {
-                        const key = `${rowType}::${colType}`;
-                        const value = heatmapData.map.get(key) ?? 0;
-                        const intensity = value / heatmapData.max;
-                        const active =
-                          heatmapSelection?.sourceType === rowType && heatmapSelection?.targetType === colType;
-                        return (
-                          <button
-                            key={key}
-                            onClick={() => onHeatmapCellClick(rowType, colType)}
-                            className={`h-10 rounded border text-xs font-semibold transition ${
-                              active
-                                ? 'border-cyan-700 ring-2 ring-cyan-300 dark:ring-cyan-700'
-                                : 'border-slate-200 dark:border-slate-700'
-                            }`}
-                            style={{
-                              backgroundColor: `rgba(8,145,178,${0.12 + intensity * 0.78})`,
-                              color: intensity > 0.5 ? '#ffffff' : '#0f172a',
-                            }}
-                            title={`${rowType} -> ${colType}: ${value} connections`}
-                          >
-                            {value}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+
+                    {heatmapData.types.map((rowType) => (
+                      <div key={`row-${rowType}`} className="contents">
+                        <div key={`row-label-${rowType}`} className="px-1 py-2 text-[10px] font-semibold text-slate-500">
+                          {rowType}
+                        </div>
+                        {heatmapData.types.map((colType) => {
+                          const key = `${rowType}::${colType}`;
+                          const value = heatmapData.map.get(key) ?? 0;
+                          const intensity = value / heatmapData.max;
+                          const active =
+                            heatmapSelection?.sourceType === rowType && heatmapSelection?.targetType === colType;
+                          return (
+                            <button
+                              key={key}
+                              onClick={() => onHeatmapCellClick(rowType, colType)}
+                              className={`h-10 rounded border text-xs font-semibold transition ${
+                                active
+                                  ? 'border-cyan-700 ring-2 ring-cyan-300 dark:ring-cyan-700'
+                                  : 'border-slate-200 dark:border-slate-700'
+                              }`}
+                              style={{
+                                backgroundColor: `rgba(8,145,178,${0.12 + intensity * 0.78})`,
+                                color: intensity > 0.5 ? '#ffffff' : '#0f172a',
+                              }}
+                              title={`${rowType} -> ${colType}: ${value} connections`}
+                            >
+                              {value}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </LazyRender>
             </div>
           </GlassCard>
         </div>
@@ -2106,7 +2232,7 @@ export default function App() {
                   {selectedEntityMiniGraph.nodes.length <= 1 ? (
                     <EmptyBlock icon={Link2} title="No local network" subtitle="This entity has no connected neighbors in the graph." />
                   ) : (
-                    <ForceGraph2D
+                    <MemoForceGraph2D
                       graphData={selectedEntityMiniGraph}
                       cooldownTicks={120}
                       nodeVal={(node) => (node.isCenter ? 16 : 9)}
