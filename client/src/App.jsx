@@ -5,14 +5,19 @@ import {
   BarChart3,
   Building2,
   CalendarDays,
+  ChevronRight,
   Download,
   Filter,
   File,
   FileText,
+  GitCompare,
   History,
   Link2,
   Moon,
+  Pause,
+  Play,
   RefreshCw,
+  Route,
   Save,
   Search,
   Share2,
@@ -21,6 +26,7 @@ import {
   Sun,
   Trash2,
   Users,
+  Wand2,
   X,
   ZoomIn,
   ZoomOut,
@@ -201,6 +207,22 @@ function extractEntityTimestamp(entity) {
     return Date.parse(`${yearMatch[0]}-01-01`);
   }
   return Number.NaN;
+}
+
+function extractChunkIndex(entity) {
+  const directFields = [entity?.chunk, entity?.chunk_id, entity?.chunkIndex, entity?.source_chunk];
+  for (const value of directFields) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  const text = `${entity?.id ?? ''} ${entity?.name ?? ''} ${entity?.description ?? ''}`;
+  const match = text.match(/chunk[_\s-]?(\d{1,3})/i);
+  if (match) {
+    return Number(match[1]);
+  }
+  return 1;
 }
 
 function renderHighlightedText(text, query) {
@@ -577,6 +599,16 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState('graph');
   const [showMobileControls, setShowMobileControls] = useState(false);
 
+  // === NEW: Task 8 - Advanced Features ===
+  const [timeTravelChunk, setTimeTravelChunk] = useState(40);
+  const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
+  const [comparisonSelection, setComparisonSelection] = useState({ a: '', b: '' });
+  const [selectedContradictionPath, setSelectedContradictionPath] = useState(null);
+  const [pathAnimationStep, setPathAnimationStep] = useState(0);
+  const [highlightedPathNodeIds, setHighlightedPathNodeIds] = useState([]);
+  const [nodeNotes, setNodeNotes] = useState({});
+  const [savedViews, setSavedViews] = useState([]);
+
   const pushToast = (type, message) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [...prev, { id, type, message }]);
@@ -644,6 +676,32 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('lexgraph-saved-searches', JSON.stringify(savedSearches.slice(0, 8)));
   }, [savedSearches]);
+
+  useEffect(() => {
+    try {
+      const rawNotes = localStorage.getItem('lexgraph-node-notes');
+      const parsedNotes = rawNotes ? JSON.parse(rawNotes) : {};
+      if (parsedNotes && typeof parsedNotes === 'object') {
+        setNodeNotes(parsedNotes);
+      }
+      const rawViews = localStorage.getItem('lexgraph-saved-views');
+      const parsedViews = rawViews ? JSON.parse(rawViews) : [];
+      if (Array.isArray(parsedViews)) {
+        setSavedViews(parsedViews.slice(0, 8));
+      }
+    } catch {
+      setNodeNotes({});
+      setSavedViews([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('lexgraph-node-notes', JSON.stringify(nodeNotes));
+  }, [nodeNotes]);
+
+  useEffect(() => {
+    localStorage.setItem('lexgraph-saved-views', JSON.stringify(savedViews.slice(0, 8)));
+  }, [savedViews]);
 
   const fetchJson = async (path, options) => {
     const response = await fetch(`${API_BASE}${path}`, options);
