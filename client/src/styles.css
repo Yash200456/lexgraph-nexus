@@ -298,3 +298,22 @@ body {
 .graph-node-re-enter {
 	animation: filterSlideIn 0.3s ease-out forwards;
 }
+
+/* ============================================================================
+   === TASK 5: PRODUCTION ENTITY MODAL ===
+   ============================================================================ */
+
+@keyframes modalSlideUp {
+	from {
+		opacity: 0;
+		transform: translateY(24px) scale(0.985);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+.entity-modal-enter {
+	animation: modalSlideUp 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}

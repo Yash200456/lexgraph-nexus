@@ -919,6 +919,62 @@ export default function App() {
       });
   }, [selectedEntity, linksWithMetadata, nodeMap]);
 
+  const selectedEntityMetadata = useMemo(() => {
+    if (!selectedEntity) {
+      return [];
+    }
+    const ignored = new Set(['id', 'key', 'name', 'type', 'description', 'x', 'y', 'vx', 'vy', 'index']);
+    return Object.entries(selectedEntity)
+      .filter(([key, value]) => !ignored.has(key) && value !== null && value !== undefined && value !== '')
+      .map(([key, value]) => ({
+        key,
+        value: typeof value === 'object' ? JSON.stringify(value) : String(value),
+      }));
+  }, [selectedEntity]);
+
+  const groupedSelectedEntityConnections = useMemo(() => {
+    const map = new Map();
+    selectedEntityConnections.forEach((conn) => {
+      if (!conn.other) {
+        return;
+      }
+      const key = conn.type || 'RELATED_TO';
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key).push(conn);
+    });
+    return Array.from(map.entries())
+      .map(([relation, items]) => ({ relation, items }))
+      .sort((a, b) => b.items.length - a.items.length);
+  }, [selectedEntityConnections]);
+
+  const selectedEntityMiniGraph = useMemo(() => {
+    if (!selectedEntity) {
+      return { nodes: [], links: [] };
+    }
+    const centerNode = { ...selectedEntity, id: selectedEntity.id, isCenter: true };
+    const miniNodes = [centerNode];
+    const seen = new Set([selectedEntity.id]);
+    const miniLinks = [];
+
+    selectedEntityConnections.forEach((conn) => {
+      if (!conn.other || seen.has(conn.other.id)) {
+        return;
+      }
+      seen.add(conn.other.id);
+      miniNodes.push({ ...conn.other, isCenter: false });
+      miniLinks.push({
+        id: conn.id,
+        source: selectedEntity.id,
+        target: conn.other.id,
+        type: conn.type,
+      });
+    });
+
+    return { nodes: miniNodes, links: miniLinks };
+  }, [selectedEntity, selectedEntityConnections]);
+
   const selectedRelationNodes = useMemo(() => {
     if (!selectedRelationship) {
       return { source: null, target: null };
@@ -1935,47 +1991,161 @@ export default function App() {
       </main>
 
       {selectedEntity && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xl font-bold">{selectedEntity.name}</p>
-                <p className="mt-1 inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold dark:bg-slate-800">
-                  {selectedEntity.type}
-                </p>
-              </div>
-              <button
-                onClick={() => setSelectedEntity(null)}
-                className="rounded-lg border border-slate-200 p-1.5 transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+        <div className="fixed inset-0 z-[65] bg-slate-950/65 p-3 backdrop-blur-sm sm:p-5" onClick={() => setSelectedEntity(null)}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="entity-modal-enter mx-auto h-full w-full max-w-7xl overflow-hidden rounded-3xl border border-slate-200/70 bg-white/95 shadow-2xl dark:border-slate-700 dark:bg-slate-900/95"
+          >
+            <div className="grid h-full grid-cols-1 lg:grid-cols-12">
+              <div className="flex h-full flex-col border-b border-slate-200 p-4 dark:border-slate-700 lg:col-span-5 lg:border-b-0 lg:border-r">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{selectedEntity.name}</p>
+                    <p className="mt-2 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">
+                      {selectedEntity.type}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedEntity(null)}
+                    className="rounded-lg border border-slate-200 p-1.5 transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
 
-            <p className="text-sm text-slate-600 dark:text-slate-300">{selectedEntity.description || 'No description available.'}</p>
+                <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Description</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700 dark:text-slate-200">
+                    {selectedEntity.description || 'No description available.'}
+                  </p>
+                </div>
 
-            <div className="mt-4 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Connected Entities</p>
-                <button onClick={() => highlightNodeInGraph(selectedEntity.id)} className="text-xs font-semibold text-cyan-700 hover:underline dark:text-cyan-300">
-                  View In Graph
-                </button>
-              </div>
-              <div className="max-h-52 space-y-2 overflow-auto pr-1">
-                {selectedEntityConnections.length === 0 ? (
-                  <p className="text-xs text-slate-500">No connections found.</p>
-                ) : (
-                  selectedEntityConnections.map((conn) => (
+                <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-xl border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900/60">
+                    <p className="text-slate-500">Connections</p>
+                    <p className="mt-1 text-xl font-bold text-cyan-700 dark:text-cyan-300">{selectedEntityConnections.length}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900/60">
+                    <p className="text-slate-500">Relation Types</p>
+                    <p className="mt-1 text-xl font-bold text-cyan-700 dark:text-cyan-300">{groupedSelectedEntityConnections.length}</p>
+                  </div>
+                </div>
+
+                <div className="mb-4 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Metadata</p>
                     <button
-                      key={conn.id}
-                      onClick={() => conn.other && highlightNodeInGraph(conn.other.id)}
-                      className="w-full rounded-lg border border-slate-200 p-2 text-left text-xs transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                      onClick={() => highlightNodeInGraph(selectedEntity.id)}
+                      className="text-xs font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
                     >
-                      <p className="truncate font-semibold">{conn.other?.name ?? 'Unknown'}</p>
-                      <p className="text-slate-500">{conn.type}</p>
+                      View in Main Graph
                     </button>
-                  ))
-                )}
+                  </div>
+                  {selectedEntityMetadata.length === 0 ? (
+                    <p className="text-xs text-slate-500">No additional metadata.</p>
+                  ) : (
+                    <div className="max-h-36 space-y-1 overflow-auto pr-1 text-xs">
+                      {selectedEntityMetadata.map((meta) => (
+                        <div key={meta.key} className="rounded-lg bg-slate-50 px-2 py-1 dark:bg-slate-800/70">
+                          <span className="font-semibold text-slate-600 dark:text-slate-200">{meta.key}: </span>
+                          <span className="text-slate-500 dark:text-slate-300">{meta.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-h-0 flex-1 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Connected Entities by Relationship</p>
+                  <div className="max-h-full space-y-3 overflow-auto pr-1">
+                    {groupedSelectedEntityConnections.length === 0 ? (
+                      <p className="text-xs text-slate-500">No connections found.</p>
+                    ) : (
+                      groupedSelectedEntityConnections.map((group) => (
+                        <div key={group.relation} className="rounded-xl border border-slate-200 p-2.5 dark:border-slate-700">
+                          <p className="mb-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">
+                            {group.relation} ({group.items.length})
+                          </p>
+                          <div className="space-y-1.5">
+                            {group.items.map((conn) => (
+                              <div key={conn.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-2 py-1.5 text-xs dark:bg-slate-800/60">
+                                <span className="truncate pr-2 font-semibold text-slate-700 dark:text-slate-100">{conn.other?.name ?? 'Unknown'}</span>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => conn.other && setSelectedEntity(conn.other)}
+                                    className="rounded bg-white px-2 py-0.5 font-semibold text-cyan-700 transition hover:bg-cyan-50 dark:bg-slate-700 dark:text-cyan-300 dark:hover:bg-slate-600"
+                                  >
+                                    View
+                                  </button>
+                                  <button
+                                    onClick={() => conn.other && highlightNodeInGraph(conn.other.id)}
+                                    className="rounded bg-white px-2 py-0.5 font-semibold text-emerald-700 transition hover:bg-emerald-50 dark:bg-slate-700 dark:text-emerald-300 dark:hover:bg-slate-600"
+                                  >
+                                    Focus
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex h-full flex-col p-4 lg:col-span-7">
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Relationship Network View</h4>
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {selectedEntityMiniGraph.nodes.length} nodes
+                  </span>
+                </div>
+
+                <div className="h-full min-h-[300px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
+                  {selectedEntityMiniGraph.nodes.length <= 1 ? (
+                    <EmptyBlock icon={Link2} title="No local network" subtitle="This entity has no connected neighbors in the graph." />
+                  ) : (
+                    <ForceGraph2D
+                      graphData={selectedEntityMiniGraph}
+                      cooldownTicks={120}
+                      nodeVal={(node) => (node.isCenter ? 16 : 9)}
+                      nodeColor={(node) => (node.isCenter ? '#f59e0b' : ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown)}
+                      linkColor={() => '#0d9488'}
+                      linkWidth={1.8}
+                      nodeLabel={(node) => `${node.name} (${node.type})`}
+                      onNodeClick={(node) => {
+                        if (!node?.id || node.id === selectedEntity.id) {
+                          return;
+                        }
+                        const next = nodeMap.get(node.id);
+                        if (next) {
+                          setSelectedEntity(next);
+                        }
+                      }}
+                      linkCanvasObjectMode={() => 'after'}
+                      linkCanvasObject={(link, ctx) => {
+                        const start = link.source;
+                        const end = link.target;
+                        if (!start || !end || typeof start !== 'object' || typeof end !== 'object') {
+                          return;
+                        }
+                        const label = link.type || '';
+                        if (!label) {
+                          return;
+                        }
+                        const mx = start.x + (end.x - start.x) * 0.5;
+                        const my = start.y + (end.y - start.y) * 0.5;
+                        ctx.save();
+                        ctx.font = '10px sans-serif';
+                        ctx.fillStyle = '#0f766e';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(label, mx, my - 4);
+                        ctx.restore();
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             </div>
           </div>
