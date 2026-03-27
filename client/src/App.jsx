@@ -213,6 +213,44 @@ function EdgeHoverTooltip({ edge, mouseX, mouseY, fromName, toName }) {
   );
 }
 
+// === NEW: Skeleton Loaders (2E) ===
+function SkeletonStatCard() {
+  return (
+    <div className="rounded-xl border border-white/25 bg-white/10 px-3 py-3 backdrop-blur">
+      <div className="flex items-center justify-between">
+        <div className="skeleton h-3 w-20 rounded" />
+        <div className="skeleton h-4 w-4 rounded-full" />
+      </div>
+      <div className="mt-2 skeleton h-8 w-12 rounded" />
+    </div>
+  );
+}
+
+function SkeletonGraphArea() {
+  return (
+    <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
+      <div className="flex h-full items-center justify-center">
+        <div className="space-y-4">
+          <div className="flex gap-4">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="skeleton h-16 w-16 rounded-full" />
+            ))}
+          </div>
+          <div className="skeleton-pulse text-center text-sm text-slate-400">Loading graph...</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonChartArea() {
+  return (
+    <div className="h-72 space-y-3">
+      <div className="skeleton-loading-bar h-full rounded-lg" />
+    </div>
+  );
+}
+
 // === NEW: Graph Controls Panel ===
 function GraphControlsPanel({
   physicsEnabled,
@@ -333,6 +371,12 @@ export default function App() {
   const [edgeLabelsVisible, setEdgeLabelsVisible] = useState(false);
   const [nodeDraggingLocked, setNodeDraggingLocked] = useState(false);
 
+  // === NEW: Task 2 - Micro-Animations & Polish ===
+  const [pageLoadComplete, setPageLoadComplete] = useState(false);
+  const [displayedStats, setDisplayedStats] = useState({ total_nodes: 0, total_edges: 0, contradictions: 0, avgConnections: 0 });
+  const [statsPulse, setStatsPulse] = useState({});
+  const filterButtonRef = useRef(null);
+
   const pushToast = (type, message) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [...prev, { id, type, message }]);
@@ -410,6 +454,45 @@ export default function App() {
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  // === NEW: 2B - Animate stat numbers counting up ===
+  useEffect(() => {
+    if (!pageLoadComplete && !loading) {
+      setPageLoadComplete(true);
+    }
+
+    const avgConn = stats.total_nodes ? Math.round((stats.total_edges * 2) / stats.total_nodes) : 0;
+    
+    // Animate numbers independently with count-up effect
+    const startTime = Date.now();
+    const duration = 1000; // 1 second count-up
+    const targets = {
+      total_nodes: stats.total_nodes,
+      total_edges: stats.total_edges,
+      contradictions: contradictions.length,
+      avgConnections: avgConn,
+    };
+
+    const animateNumbers = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+
+      setDisplayedStats({
+        total_nodes: Math.floor(targets.total_nodes * progress),
+        total_edges: Math.floor(targets.total_edges * progress),
+        contradictions: Math.floor(targets.contradictions * progress),
+        avgConnections: Math.floor(targets.avgConnections * progress),
+      });
+
+      if (progress < 1) {
+        requestAnimationFrame(animateNumbers);
+      } else {
+        setDisplayedStats(targets);
+      }
+    };
+
+    animateNumbers();
+  }, [stats, contradictions, loading]);
 
   const nodeMap = useMemo(() => {
     const map = new Map();
@@ -601,6 +684,26 @@ export default function App() {
     }
   };
 
+  // === NEW: 2D - Ripple effect on button click ===
+  const createRipple = (event) => {
+    if (!event.currentTarget) return;
+
+    const button = event.currentTarget;
+    const rect = button.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height);
+    const x = event.clientX - rect.left - size / 2;
+    const y = event.clientY - rect.top - size / 2;
+
+    const ripple = document.createElement('span');
+    ripple.className = 'ripple';
+    ripple.style.width = ripple.style.height = `${size}px`;
+    ripple.style.left = `${x}px`;
+    ripple.style.top = `${y}px`;
+
+    button.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 600);
+  };
+
   const downloadBlob = (filename, blob) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -671,12 +774,12 @@ export default function App() {
   };
 
   const statCards = [
-    { label: 'Entities', value: stats.total_nodes, icon: Users },
-    { label: 'Relationships', value: stats.total_edges, icon: Link2 },
-    { label: 'Contradictions', value: contradictions.length, icon: AlertCircle },
+    { label: 'Entities', value: displayedStats.total_nodes, icon: Users },
+    { label: 'Relationships', value: displayedStats.total_edges, icon: Link2 },
+    { label: 'Contradictions', value: displayedStats.contradictions, icon: AlertCircle },
     {
       label: 'Avg Connections',
-      value: stats.total_nodes ? Math.round((stats.total_edges * 2) / stats.total_nodes) : 0,
+      value: displayedStats.avgConnections,
       icon: BarChart3,
     },
   ];
@@ -686,7 +789,9 @@ export default function App() {
       <div className="pointer-events-none absolute -left-28 top-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-700/20" />
       <div className="pointer-events-none absolute -right-32 top-44 h-80 w-80 rounded-full bg-amber-300/25 blur-3xl dark:bg-amber-500/10" />
 
-      <header className="relative border-b border-white/60 bg-gradient-to-r from-cyan-700 via-teal-700 to-sky-700 text-white shadow-lg dark:border-slate-800">
+      <header className={`relative border-b border-white/60 bg-gradient-to-r from-cyan-700 via-teal-700 to-sky-700 text-white shadow-lg dark:border-slate-800 ${
+        pageLoadComplete ? 'animate-header-enter' : ''
+      }`}>
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-7 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -716,22 +821,29 @@ export default function App() {
           </div>
 
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {statCards.map((card) => (
-              <div key={card.label} className="rounded-xl border border-white/25 bg-white/10 px-3 py-3 backdrop-blur">
-                <div className="flex items-center justify-between">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-100">{card.label}</p>
-                  <card.icon className="h-4 w-4 text-cyan-50" />
-                </div>
-                <p className="mt-2 text-2xl font-bold">{card.value}</p>
-              </div>
-            ))}
+            {loading && nodes.length === 0
+              ? [...Array(4)].map((_, i) => <SkeletonStatCard key={i} />)
+              : statCards.map((card, idx) => (
+                  <div
+                    key={card.label}
+                    className={`stat-card stat-card-${idx} rounded-xl border border-white/25 bg-white/10 px-3 py-3 backdrop-blur transition-all duration-300 ${
+                      pageLoadComplete ? 'animate-stat-card-enter' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-100">{card.label}</p>
+                      <card.icon className={`h-4 w-4 text-cyan-50 ${statsPulse[card.label] ? 'animate-icon-bounce' : ''}`} />
+                    </div>
+                    <p className="stat-card-number mt-2 text-2xl font-bold">{card.value}</p>
+                  </div>
+                ))}
           </div>
         </div>
       </header>
 
       <main className="relative mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-          <GlassCard className="p-4 xl:col-span-8">
+          <GlassCard className={`p-4 xl:col-span-8 ${pageLoadComplete ? 'animate-graph-enter' : ''}`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold">Interactive Graph Explorer</h2>
@@ -792,10 +904,13 @@ export default function App() {
                   return (
                     <button
                       key={filter.value}
-                      onClick={() => setActiveFilter(filter.value)}
-                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                      onClick={(e) => {
+                        createRipple(e);
+                        setActiveFilter(filter.value);
+                      }}
+                      className={`ripple-effect inline-flex items-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${
                         active
-                          ? 'bg-cyan-700 text-white'
+                          ? 'filter-button-active text-white'
                           : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
                       }`}
                     >
@@ -809,7 +924,7 @@ export default function App() {
 
             <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
               {loading && nodes.length === 0 ? (
-                <div className="h-full animate-pulse bg-gradient-to-r from-slate-200 via-slate-100 to-slate-200 dark:from-slate-800 dark:via-slate-700 dark:to-slate-800" />
+                <SkeletonGraphArea />
               ) : graphData.nodes.length === 0 ? (
                 <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
               ) : (
@@ -922,7 +1037,7 @@ export default function App() {
             </button>
           </GlassCard>
 
-          <div className="space-y-5 xl:col-span-4">
+          <div className={`space-y-5 xl:col-span-4 ${pageLoadComplete ? 'animate-sidebar-enter' : ''}`}>
             <GlassCard className="p-4">
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Relationship Explorer</h3>
@@ -993,7 +1108,9 @@ export default function App() {
           <GlassCard className="p-4">
             <h3 className="mb-3 text-base font-bold">Entity Type Distribution</h3>
             <div className="h-72">
-              {entityDistribution.length === 0 ? (
+              {loading && nodes.length === 0 ? (
+                <SkeletonChartArea />
+              ) : entityDistribution.length === 0 ? (
                 <EmptyBlock icon={Users} title="No entity distribution" subtitle="This chart appears once entity data is loaded." />
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1013,7 +1130,9 @@ export default function App() {
           <GlassCard className="p-4">
             <h3 className="mb-3 text-base font-bold">Relationship Type Bar Chart</h3>
             <div className="h-72">
-              {relationshipDistribution.length === 0 ? (
+              {loading && nodes.length === 0 ? (
+                <SkeletonChartArea />
+              ) : relationshipDistribution.length === 0 ? (
                 <EmptyBlock icon={BarChart3} title="No relationships found" subtitle="Relationship bars will appear when links exist." />
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1032,7 +1151,9 @@ export default function App() {
           <GlassCard className="p-4">
             <h3 className="mb-3 text-base font-bold">Timeline View (Date Entities)</h3>
             <div className="h-72">
-              {timelineData.length === 0 ? (
+              {loading && nodes.length === 0 ? (
+                <SkeletonChartArea />
+              ) : timelineData.length === 0 ? (
                 <EmptyBlock icon={AlertCircle} title="No date entities detected" subtitle="Timeline needs entities of type Date." />
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1054,7 +1175,9 @@ export default function App() {
           <GlassCard className="p-4">
             <h3 className="mb-3 text-base font-bold">Top Connected Entities</h3>
             <div className="h-72">
-              {topConnectedEntities.length === 0 ? (
+              {loading && nodes.length === 0 ? (
+                <SkeletonChartArea />
+              ) : topConnectedEntities.length === 0 ? (
                 <EmptyBlock icon={Users} title="No connectivity data" subtitle="Top nodes appear when graph links are available." />
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
