@@ -9,13 +9,17 @@ import {
   Filter,
   File,
   FileText,
+  History,
   Link2,
   Moon,
   RefreshCw,
+  Save,
   Search,
   Share2,
+  SlidersHorizontal,
   Sparkles,
   Sun,
+  Trash2,
   Users,
   X,
   ZoomIn,
@@ -180,6 +184,46 @@ function renderActivePieShape(props) {
         fill={fill}
       />
     </g>
+  );
+}
+
+function extractEntityTimestamp(entity) {
+  const text = `${entity?.name ?? ''} ${entity?.description ?? ''}`.trim();
+  if (!text) {
+    return Number.NaN;
+  }
+  const direct = Date.parse(text);
+  if (!Number.isNaN(direct)) {
+    return direct;
+  }
+  const yearMatch = text.match(/\b(19|20)\d{2}\b/);
+  if (yearMatch) {
+    return Date.parse(`${yearMatch[0]}-01-01`);
+  }
+  return Number.NaN;
+}
+
+function renderHighlightedText(text, query) {
+  const source = String(text ?? '');
+  const q = String(query ?? '').trim();
+  if (!q) {
+    return source;
+  }
+  const lower = source.toLowerCase();
+  const target = q.toLowerCase();
+  const index = lower.indexOf(target);
+  if (index === -1) {
+    return source;
+  }
+  const before = source.slice(0, index);
+  const match = source.slice(index, index + q.length);
+  const after = source.slice(index + q.length);
+  return (
+    <>
+      {before}
+      <mark className="rounded bg-amber-100 px-0.5 text-slate-900 dark:bg-amber-400/40 dark:text-white">{match}</mark>
+      {after}
+    </>
   );
 }
 
@@ -416,6 +460,23 @@ export default function App() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const [autocompleteIndex, setAutocompleteIndex] = useState(-1);
+  const [searchHistory, setSearchHistory] = useState([]);
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [advancedFilters, setAdvancedFilters] = useState({
+    relationshipType: '',
+    connectedTo: '',
+    dateFrom: '',
+    dateTo: '',
+  });
+  const [advancedDraft, setAdvancedDraft] = useState({
+    relationshipType: '',
+    connectedTo: '',
+    dateFrom: '',
+    dateTo: '',
+  });
 
   const [highlightedNodeIds, setHighlightedNodeIds] = useState([]);
   const [selectedEntity, setSelectedEntity] = useState(null);
@@ -467,6 +528,32 @@ export default function App() {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('lexgraph-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      const rawHistory = localStorage.getItem('lexgraph-search-history');
+      const parsedHistory = rawHistory ? JSON.parse(rawHistory) : [];
+      if (Array.isArray(parsedHistory)) {
+        setSearchHistory(parsedHistory.slice(0, 5));
+      }
+      const rawSaved = localStorage.getItem('lexgraph-saved-searches');
+      const parsedSaved = rawSaved ? JSON.parse(rawSaved) : [];
+      if (Array.isArray(parsedSaved)) {
+        setSavedSearches(parsedSaved.slice(0, 8));
+      }
+    } catch {
+      setSearchHistory([]);
+      setSavedSearches([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('lexgraph-search-history', JSON.stringify(searchHistory.slice(0, 5)));
+  }, [searchHistory]);
+
+  useEffect(() => {
+    localStorage.setItem('lexgraph-saved-searches', JSON.stringify(savedSearches.slice(0, 8)));
+  }, [savedSearches]);
 
   const fetchJson = async (path, options) => {
     const response = await fetch(`${API_BASE}${path}`, options);
@@ -594,24 +681,58 @@ export default function App() {
   }, [nodes, linksWithMetadata]);
 
   const baseFilteredNodes = useMemo(() => {
+    const fromTs = advancedFilters.dateFrom ? Date.parse(advancedFilters.dateFrom) : Number.NaN;
+    const toTs = advancedFilters.dateTo ? Date.parse(advancedFilters.dateTo) : Number.NaN;
     return nodes.filter((n) => {
       const matchesFilter = activeFilter === 'All' || n.type === activeFilter;
-      const matchesSearch = n.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const q = searchQuery.toLowerCase();
+      const matchesSearch = n.name.toLowerCase().includes(q) || n.description.toLowerCase().includes(q);
       const visibleInLegend = !hiddenEntityTypes.has(n.type);
-      return matchesFilter && matchesSearch && visibleInLegend;
+      let matchesDateRange = true;
+      if (!Number.isNaN(fromTs) || !Number.isNaN(toTs)) {
+        const ts = extractEntityTimestamp(n);
+        matchesDateRange = !Number.isNaN(ts);
+        if (matchesDateRange && !Number.isNaN(fromTs)) {
+          matchesDateRange = ts >= fromTs;
+        }
+        if (matchesDateRange && !Number.isNaN(toTs)) {
+          matchesDateRange = ts <= toTs;
+        }
+      }
+      return matchesFilter && matchesSearch && visibleInLegend && matchesDateRange;
     });
-  }, [nodes, activeFilter, searchQuery, hiddenEntityTypes]);
+  }, [nodes, activeFilter, searchQuery, hiddenEntityTypes, advancedFilters.dateFrom, advancedFilters.dateTo]);
 
   const baseFilteredNodeIds = useMemo(() => new Set(baseFilteredNodes.map((n) => n.id)), [baseFilteredNodes]);
 
   const filteredLinks = useMemo(() => {
+    const hasConnectedTo = advancedFilters.connectedTo.trim().length > 0;
+    const connectedSeed = new Set(
+      nodes
+        .filter((n) => n.name.toLowerCase().includes(advancedFilters.connectedTo.trim().toLowerCase()))
+        .map((n) => n.id)
+    );
+
     return linksWithMetadata.filter((l) => {
       if (!baseFilteredNodeIds.has(l.sourceId) || !baseFilteredNodeIds.has(l.targetId)) {
         return false;
       }
 
-      if (selectedRelationshipType && l.type !== selectedRelationshipType) {
+      const chartRel = selectedRelationshipType;
+      const advancedRel = advancedFilters.relationshipType;
+      if (chartRel && advancedRel && chartRel !== advancedRel) {
         return false;
+      }
+      const effectiveRelationship = chartRel || advancedRel;
+      if (effectiveRelationship && l.type !== effectiveRelationship) {
+        return false;
+      }
+
+      if (hasConnectedTo) {
+        const touchesSeed = connectedSeed.has(l.sourceId) || connectedSeed.has(l.targetId);
+        if (!touchesSeed) {
+          return false;
+        }
       }
 
       if (heatmapSelection) {
@@ -626,10 +747,24 @@ export default function App() {
 
       return true;
     });
-  }, [linksWithMetadata, baseFilteredNodeIds, selectedRelationshipType, heatmapSelection, nodeMap]);
+  }, [
+    linksWithMetadata,
+    baseFilteredNodeIds,
+    selectedRelationshipType,
+    heatmapSelection,
+    nodeMap,
+    advancedFilters.relationshipType,
+    advancedFilters.connectedTo,
+    nodes,
+  ]);
 
   const filteredNodes = useMemo(() => {
-    const hasLinkDrivenFilter = Boolean(selectedRelationshipType || heatmapSelection);
+    const hasLinkDrivenFilter = Boolean(
+      selectedRelationshipType ||
+      heatmapSelection ||
+      advancedFilters.relationshipType ||
+      advancedFilters.connectedTo.trim()
+    );
     if (!hasLinkDrivenFilter) {
       return baseFilteredNodes;
     }
@@ -640,16 +775,51 @@ export default function App() {
       ids.add(l.targetId);
     });
     return baseFilteredNodes.filter((n) => ids.has(n.id));
-  }, [baseFilteredNodes, filteredLinks, selectedRelationshipType, heatmapSelection]);
+  }, [
+    baseFilteredNodes,
+    filteredLinks,
+    selectedRelationshipType,
+    heatmapSelection,
+    advancedFilters.relationshipType,
+    advancedFilters.connectedTo,
+  ]);
 
   const graphData = useMemo(() => ({ nodes: filteredNodes, links: filteredLinks }), [filteredNodes, filteredLinks]);
 
   const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
       return [];
     }
-    return filteredNodes.slice(0, 7);
-  }, [searchQuery, filteredNodes]);
+    return nodes
+      .map((n) => {
+        const inName = n.name.toLowerCase().indexOf(q);
+        const inDesc = n.description.toLowerCase().indexOf(q);
+        let score = Number.POSITIVE_INFINITY;
+        if (inName >= 0) {
+          score = inName;
+        } else if (inDesc >= 0) {
+          score = 100 + inDesc;
+        }
+        return { ...n, _score: score };
+      })
+      .filter((n) => Number.isFinite(n._score))
+      .sort((a, b) => a._score - b._score)
+      .slice(0, 5);
+  }, [searchQuery, nodes]);
+
+  useEffect(() => {
+    if (!showSearchDropdown) {
+      return;
+    }
+    if (searchResults.length === 0) {
+      setAutocompleteIndex(-1);
+      return;
+    }
+    if (autocompleteIndex >= searchResults.length) {
+      setAutocompleteIndex(searchResults.length - 1);
+    }
+  }, [showSearchDropdown, searchResults, autocompleteIndex]);
 
   const entityDistribution = useMemo(() => {
     const counts = new Map();
@@ -837,6 +1007,116 @@ export default function App() {
       setSelectedRelationshipType('');
       pushToast('success', `Showing ${sourceType} ↔ ${targetType} connections`);
     }
+  };
+
+  const addSearchHistory = (text) => {
+    const value = String(text || '').trim();
+    if (!value) {
+      return;
+    }
+    setSearchHistory((prev) => [value, ...prev.filter((item) => item !== value)].slice(0, 5));
+  };
+
+  const selectSearchEntity = (entity) => {
+    if (!entity?.id) {
+      return;
+    }
+    setSearchQuery(entity.name);
+    setShowSearchDropdown(false);
+    setAutocompleteIndex(-1);
+    addSearchHistory(entity.name);
+    highlightNodeInGraph(entity.id);
+  };
+
+  const runSearchText = (text) => {
+    const value = String(text || '').trim();
+    if (!value) {
+      return;
+    }
+    setSearchQuery(value);
+    setShowSearchDropdown(false);
+    setAutocompleteIndex(-1);
+    addSearchHistory(value);
+  };
+
+  const onSearchKeyDown = (event) => {
+    if (!showSearchDropdown) {
+      if (event.key === 'ArrowDown' && searchResults.length > 0) {
+        setShowSearchDropdown(true);
+        setAutocompleteIndex(0);
+      }
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setAutocompleteIndex((prev) => {
+        const max = searchResults.length - 1;
+        if (max < 0) return -1;
+        return prev >= max ? 0 : prev + 1;
+      });
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setAutocompleteIndex((prev) => {
+        const max = searchResults.length - 1;
+        if (max < 0) return -1;
+        return prev <= 0 ? max : prev - 1;
+      });
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (autocompleteIndex >= 0 && searchResults[autocompleteIndex]) {
+        selectSearchEntity(searchResults[autocompleteIndex]);
+      } else if (searchResults[0]) {
+        selectSearchEntity(searchResults[0]);
+      } else if (searchQuery.trim()) {
+        runSearchText(searchQuery);
+      }
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      setShowSearchDropdown(false);
+      setAutocompleteIndex(-1);
+    }
+  };
+
+  const openAdvancedSearch = () => {
+    setAdvancedDraft(advancedFilters);
+    setShowAdvancedSearch(true);
+  };
+
+  const applyAdvancedSearch = () => {
+    setAdvancedFilters(advancedDraft);
+    setSelectedRelationshipType(advancedDraft.relationshipType || '');
+    setShowAdvancedSearch(false);
+    pushToast('success', 'Advanced filters applied');
+  };
+
+  const saveAdvancedSearch = () => {
+    const payload = {
+      id: `${Date.now()}`,
+      criteria: { ...advancedDraft },
+      label: [advancedDraft.relationshipType, advancedDraft.connectedTo, advancedDraft.dateFrom, advancedDraft.dateTo]
+        .filter(Boolean)
+        .join(' | ') || 'Saved search',
+    };
+    setSavedSearches((prev) => [payload, ...prev].slice(0, 8));
+    pushToast('success', 'Search query saved');
+  };
+
+  const clearAllFilters = () => {
+    setSearchQuery('');
+    setActiveFilter('All');
+    setSelectedRelationshipType('');
+    setHeatmapSelection(null);
+    setAdvancedFilters({ relationshipType: '', connectedTo: '', dateFrom: '', dateTo: '' });
+    setHiddenEntityTypes(new Set());
   };
 
   // === NEW: Node Hover Handler (1A) ===
@@ -1056,28 +1336,67 @@ export default function App() {
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onFocus={() => setShowSearchDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowSearchDropdown(false), 120)}
+                  onKeyDown={onSearchKeyDown}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setShowSearchDropdown(true);
+                    setAutocompleteIndex(-1);
+                  }}
                   placeholder="Search entities by name"
                   className="w-full rounded-xl border border-slate-200 bg-white px-9 py-2 text-sm outline-none ring-cyan-600 transition focus:ring-2 dark:border-slate-700 dark:bg-slate-900"
                 />
-                {searchQuery && (
+                <button
+                  onClick={openAdvancedSearch}
+                  className="absolute right-2 top-1.5 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  Advanced
+                </button>
+                {showSearchDropdown && (
                   <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
-                    {searchResults.length === 0 ? (
-                      <p className="px-3 py-2 text-xs text-slate-500">No matches</p>
+                    {searchQuery.trim() ? (
+                      searchResults.length === 0 ? (
+                        <p className="px-3 py-2 text-xs text-slate-500">No matches</p>
+                      ) : (
+                        searchResults.map((n, idx) => (
+                          <button
+                            key={n.id}
+                            onMouseDown={() => selectSearchEntity(n)}
+                            className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
+                              autocompleteIndex === idx ? 'bg-cyan-50 dark:bg-cyan-900/30' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+                            }`}
+                          >
+                            <span className="truncate">{renderHighlightedText(n.name, searchQuery)}</span>
+                            <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-[10px] dark:bg-slate-700">{n.type}</span>
+                          </button>
+                        ))
+                      )
                     ) : (
-                      searchResults.map((n) => (
-                        <button
-                          key={n.id}
-                          onClick={() => {
-                            highlightNodeInGraph(n.id);
-                            setSearchQuery('');
-                          }}
-                          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800"
-                        >
-                          <span className="truncate">{n.name}</span>
-                          <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-[10px] dark:bg-slate-700">{n.type}</span>
-                        </button>
-                      ))
+                      <div>
+                        <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          <span className="inline-flex items-center gap-1"><History className="h-3.5 w-3.5" /> Recent Searches</span>
+                          {searchHistory.length > 0 && (
+                            <button onMouseDown={() => setSearchHistory([])} className="text-rose-600 hover:underline dark:text-rose-300">
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        {searchHistory.length === 0 ? (
+                          <p className="px-3 pb-3 text-xs text-slate-500">No recent searches</p>
+                        ) : (
+                          searchHistory.map((item) => (
+                            <button
+                              key={item}
+                              onMouseDown={() => runSearchText(item)}
+                              className="block w-full px-3 py-2 text-left text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800"
+                            >
+                              {item}
+                            </button>
+                          ))
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1106,6 +1425,62 @@ export default function App() {
                 })}
               </div>
             </div>
+
+            {(searchQuery ||
+              activeFilter !== 'All' ||
+              selectedRelationshipType ||
+              advancedFilters.connectedTo ||
+              advancedFilters.dateFrom ||
+              advancedFilters.dateTo ||
+              hiddenEntityTypes.size > 0 ||
+              heatmapSelection) && (
+              <div className="mb-3 rounded-xl border border-slate-200 bg-white/70 p-2.5 dark:border-slate-700 dark:bg-slate-900/60">
+                <div className="mb-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-300">
+                  <span>Showing {filteredNodes.length} of {nodes.length} entities</span>
+                  <button onClick={clearAllFilters} className="font-semibold text-cyan-700 hover:underline dark:text-cyan-300">
+                    Clear all
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')} className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-2 py-1 text-[11px] font-semibold text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-200">
+                      Query: {searchQuery}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {activeFilter !== 'All' && (
+                    <button onClick={() => setActiveFilter('All')} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                      Type: {activeFilter}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {(selectedRelationshipType || advancedFilters.relationshipType) && (
+                    <button onClick={() => { setSelectedRelationshipType(''); setAdvancedFilters((prev) => ({ ...prev, relationshipType: '' })); }} className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-[11px] font-semibold text-rose-700 dark:bg-rose-900/40 dark:text-rose-200">
+                      Relationship: {selectedRelationshipType || advancedFilters.relationshipType}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {advancedFilters.connectedTo && (
+                    <button onClick={() => setAdvancedFilters((prev) => ({ ...prev, connectedTo: '' }))} className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+                      Connected to: {advancedFilters.connectedTo}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {(advancedFilters.dateFrom || advancedFilters.dateTo) && (
+                    <button onClick={() => setAdvancedFilters((prev) => ({ ...prev, dateFrom: '', dateTo: '' }))} className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
+                      Date: {advancedFilters.dateFrom || 'Any'} to {advancedFilters.dateTo || 'Any'}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {heatmapSelection && (
+                    <button onClick={() => setHeatmapSelection(null)} className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-1 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+                      Heatmap: {heatmapSelection.sourceType} ↔ {heatmapSelection.targetType}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
               {loading && nodes.length === 0 ? (
@@ -1602,6 +1977,116 @@ export default function App() {
                   ))
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAdvancedSearch && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold">Advanced Search</h3>
+              <button
+                onClick={() => setShowAdvancedSearch(false)}
+                className="rounded-lg border border-slate-200 p-1.5 transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Has relationship type</span>
+                <input
+                  value={advancedDraft.relationshipType}
+                  onChange={(e) => setAdvancedDraft((prev) => ({ ...prev, relationshipType: e.target.value }))}
+                  placeholder="e.g. CONTRADICTS"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                />
+              </label>
+
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Connected to</span>
+                <input
+                  value={advancedDraft.connectedTo}
+                  onChange={(e) => setAdvancedDraft((prev) => ({ ...prev, connectedTo: e.target.value }))}
+                  placeholder="Entity name"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                />
+              </label>
+
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Created between (from)</span>
+                <input
+                  type="date"
+                  value={advancedDraft.dateFrom}
+                  onChange={(e) => setAdvancedDraft((prev) => ({ ...prev, dateFrom: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                />
+              </label>
+
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Created between (to)</span>
+                <input
+                  type="date"
+                  value={advancedDraft.dateTo}
+                  onChange={(e) => setAdvancedDraft((prev) => ({ ...prev, dateTo: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Saved Search Queries</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={saveAdvancedSearch}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700"
+                  >
+                    <Save className="h-3.5 w-3.5" /> Save current
+                  </button>
+                  <button
+                    onClick={() => setSavedSearches([])}
+                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/40 dark:text-rose-200"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Clear
+                  </button>
+                </div>
+              </div>
+              {savedSearches.length === 0 ? (
+                <p className="text-xs text-slate-500">No saved queries yet.</p>
+              ) : (
+                <div className="max-h-24 space-y-1 overflow-auto pr-1">
+                  {savedSearches.map((saved) => (
+                    <button
+                      key={saved.id}
+                      onClick={() => setAdvancedDraft(saved.criteria)}
+                      className="block w-full rounded-lg border border-slate-200 px-2 py-1 text-left text-xs transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                    >
+                      {saved.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setAdvancedDraft({ relationshipType: '', connectedTo: '', dateFrom: '', dateTo: '' });
+                }}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+              >
+                Reset
+              </button>
+              <button
+                onClick={applyAdvancedSearch}
+                className="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-cyan-800"
+              >
+                Apply Search
+              </button>
             </div>
           </div>
         </div>
