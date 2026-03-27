@@ -14,6 +14,13 @@ import {
   Sun,
   Users,
   X,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Zap,
+  Eye,
+  Tag,
+  Expand,
 } from 'lucide-react';
 import {
   Bar,
@@ -83,6 +90,32 @@ function normalizeLink(link, index) {
   };
 }
 
+// === NEW: Helper function to get second-degree connections ===
+function getSecondDegreeConnections(nodeId, linksWithMetadata) {
+  const secondDegree = new Set();
+  // Find all first-degree neighbors
+  const firstDegree = new Set();
+  linksWithMetadata.forEach((link) => {
+    if (link.sourceId === nodeId) {
+      firstDegree.add(link.targetId);
+    } else if (link.targetId === nodeId) {
+      firstDegree.add(link.sourceId);
+    }
+  });
+  // Find second-degree connections
+  linksWithMetadata.forEach((link) => {
+    if (firstDegree.has(link.sourceId)) {
+      secondDegree.add(link.targetId);
+    } else if (firstDegree.has(link.targetId)) {
+      secondDegree.add(link.sourceId);
+    }
+  });
+  // Remove first-degree from second-degree
+  firstDegree.forEach((id) => secondDegree.delete(id));
+  secondDegree.delete(nodeId);
+  return secondDegree;
+}
+
 function GlassCard({ children, className = '' }) {
   return (
     <div
@@ -99,6 +132,166 @@ function EmptyBlock({ icon: Icon, title, subtitle }) {
       <Icon className="mb-2 h-7 w-7 text-slate-400 dark:text-slate-500" />
       <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{title}</p>
       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>
+    </div>
+  );
+}
+
+// === NEW: Node Hover Tooltip Component ===
+function NodeHoverTooltip({ node, mouseX, mouseY, connectionCount, connectedNames }) {
+  if (!node) return null;
+  return (
+    <div
+      className="pointer-events-none fixed z-[100] max-w-xs rounded-lg border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95"
+      style={{
+        left: `${mouseX + 10}px`,
+        top: `${mouseY + 10}px`,
+        animation: 'fadeIn 0.2s ease-out',
+      }}
+    >
+      <p className="text-sm font-bold text-slate-900 dark:text-white">{node.name}</p>
+      <div className="mt-1 flex items-center gap-2">
+        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {node.type}
+        </span>
+        <span className="text-[11px] font-semibold text-cyan-700 dark:text-cyan-300">
+          {connectionCount} connections
+        </span>
+      </div>
+      {node.description && (
+        <p className="mt-2 line-clamp-2 text-xs text-slate-600 dark:text-slate-400">{node.description}</p>
+      )}
+      {connectedNames.length > 0 && (
+        <div className="mt-2 text-[10px]">
+          <p className="font-semibold text-slate-500">Connected to:</p>
+          <p className="line-clamp-2 text-slate-600 dark:text-slate-400">{connectedNames.join(', ')}</p>
+        </div>
+      )}
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// === NEW: Edge Hover Tooltip Component ===
+function EdgeHoverTooltip({ edge, mouseX, mouseY, fromName, toName }) {
+  if (!edge) return null;
+  return (
+    <div
+      className="pointer-events-none fixed z-[100] max-w-xs rounded-lg border border-cyan-200 bg-cyan-50/95 p-3 shadow-xl backdrop-blur dark:border-cyan-900 dark:bg-cyan-950/95"
+      style={{
+        left: `${mouseX + 10}px`,
+        top: `${mouseY + 10}px`,
+        animation: 'fadeIn 0.2s ease-out',
+      }}
+    >
+      <p className="text-sm font-bold text-cyan-900 dark:text-cyan-100">{edge.type}</p>
+      <div className="mt-2 space-y-1 text-xs">
+        <p className="text-cyan-800 dark:text-cyan-200">
+          <span className="font-semibold">From:</span> {fromName}
+        </p>
+        <p className="text-cyan-800 dark:text-cyan-200">
+          <span className="font-semibold">To:</span> {toName}
+        </p>
+      </div>
+      {edge.reason && (
+        <div className="mt-2">
+          <p className="font-semibold text-cyan-800 dark:text-cyan-200">Reason:</p>
+          <p className="line-clamp-2 text-[10px] text-cyan-700 dark:text-cyan-300">{edge.reason}</p>
+        </div>
+      )}
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// === NEW: Graph Controls Panel ===
+function GraphControlsPanel({
+  physicsEnabled,
+  setPhysicsEnabled,
+  labelsAlwaysVisible,
+  setLabelsAlwaysVisible,
+  edgeLabelsVisible,
+  setEdgeLabelsVisible,
+  nodeDraggingLocked,
+  setNodeDraggingLocked,
+  graphRef,
+}) {
+  return (
+    <div className="pointer-events-auto fixed bottom-6 left-6 z-50 space-y-2 rounded-xl border border-slate-200 bg-white/90 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Graph Controls</p>
+      <div className="space-y-2">
+        <button
+          onClick={() => graphRef.current?.centerAt(0, 0, 800) || null}
+          title="Reset view to center"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Reset
+        </button>
+        <button
+          onClick={() => graphRef.current?.zoom(1.2, 300) || null}
+          title="Zoom in"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800"
+        >
+          <ZoomIn className="h-4 w-4" />
+          Zoom In
+        </button>
+        <button
+          onClick={() => graphRef.current?.zoom(0.8, 300) || null}
+          title="Zoom out"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800"
+        >
+          <ZoomOut className="h-4 w-4" />
+          Zoom Out
+        </button>
+        <div className="my-2 h-px bg-slate-200 dark:bg-slate-700" />
+        <button
+          onClick={() => setPhysicsEnabled(!physicsEnabled)}
+          title={physicsEnabled ? 'Disable physics' : 'Enable physics'}
+          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
+            physicsEnabled ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-300' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Zap className="h-4 w-4" />
+          Physics: {physicsEnabled ? 'On' : 'Off'}
+        </button>
+        <button
+          onClick={() => setLabelsAlwaysVisible(!labelsAlwaysVisible)}
+          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
+            labelsAlwaysVisible ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Eye className="h-4 w-4" />
+          Labels: {labelsAlwaysVisible ? 'Always' : 'Hover'}
+        </button>
+        <button
+          onClick={() => setEdgeLabelsVisible(!edgeLabelsVisible)}
+          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
+            edgeLabelsVisible ? 'bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Tag className="h-4 w-4" />
+          Edges: {edgeLabelsVisible ? 'On' : 'Off'}
+        </button>
+        <button
+          onClick={() => setNodeDraggingLocked(!nodeDraggingLocked)}
+          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
+            nodeDraggingLocked ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Expand className="h-4 w-4" />
+          {nodeDraggingLocked ? 'Locked' : 'Draggable'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -124,6 +317,21 @@ export default function App() {
   const [selectedRelationship, setSelectedRelationship] = useState(null);
 
   const [toasts, setToasts] = useState([]);
+
+  // === NEW: Advanced Graph Interactions ===
+  const [hoveredNode, setHoveredNode] = useState(null);
+  const [hoveredEdge, setHoveredEdge] = useState(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const [secondDegreeNodes, setSecondDegreeNodes] = useState(new Set());
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [showNodeTooltip, setShowNodeTooltip] = useState(false);
+  const [showEdgeTooltip, setShowEdgeTooltip] = useState(false);
+  
+  // Graph control states
+  const [physicsEnabled, setPhysicsEnabled] = useState(true);
+  const [labelsAlwaysVisible, setLabelsAlwaysVisible] = useState(false);
+  const [edgeLabelsVisible, setEdgeLabelsVisible] = useState(false);
+  const [nodeDraggingLocked, setNodeDraggingLocked] = useState(false);
 
   const pushToast = (type, message) => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -342,6 +550,14 @@ export default function App() {
     if (!node?.id) {
       return;
     }
+    
+    // === 1B: Click-to-Focus Mode ===
+    if (focusMode) {
+      // In focus mode, show 2nd-degree connections
+      const secondDegree = getSecondDegreeConnections(node.id, linksWithMetadata);
+      setSecondDegreeNodes(secondDegree);
+    }
+    
     setHighlightedNodeIds([node.id]);
     setSelectedRelationship(null);
     setSelectedEntity(nodeMap.get(node.id) ?? node);
@@ -353,6 +569,36 @@ export default function App() {
     setSelectedRelationship({ ...link, sourceId, targetId });
     setSelectedEntity(null);
     setHighlightedNodeIds([sourceId, targetId]);
+  };
+
+  // === NEW: Node Hover Handler (1A) ===
+  const onNodeHover = (node) => {
+    setHoveredNode(node);
+    if (node) {
+      setShowNodeTooltip(true);
+    } else {
+      setShowNodeTooltip(false);
+    }
+  };
+
+  // === NEW: Link Hover Handler (1C) ===
+  const onLinkHover = (link) => {
+    setHoveredEdge(link);
+    if (link) {
+      setShowEdgeTooltip(true);
+    } else {
+      setShowEdgeTooltip(false);
+    }
+  };
+
+  // === NEW: Track mouse position for tooltips ===
+  const handleGraphMouseMove = (event) => {
+    if (event && typeof event === 'object') {
+      setMousePos({
+        x: event.clientX || event.x || 0,
+        y: event.clientY || event.y || 0,
+      });
+    }
   };
 
   const downloadBlob = (filename, blob) => {
@@ -567,41 +813,113 @@ export default function App() {
               ) : graphData.nodes.length === 0 ? (
                 <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
               ) : (
-                <ForceGraph2D
-                  ref={graphRef}
-                  graphData={graphData}
-                  nodeLabel={(node) => `${node.name} (${node.type})`}
-                  linkLabel={(link) => `${link.type}${link.reason ? `: ${link.reason}` : ''}`}
-                  onNodeClick={onNodeClick}
-                  onLinkClick={onLinkClick}
-                  nodeColor={(node) => {
-                    if (highlightedNodeIds.includes(node.id)) {
-                      return '#f59e0b';
-                    }
-                    return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
-                  }}
-                  nodeVal={(node) => 4 + (degreeMap.get(node.id) ?? 0) * 0.8}
-                  linkColor={(link) => {
-                    const source = getLinkNodeId(link.source);
-                    const target = getLinkNodeId(link.target);
-                    return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? '#0d9488' : '#94a3b8';
-                  }}
-                  linkWidth={(link) => {
-                    const source = getLinkNodeId(link.source);
-                    const target = getLinkNodeId(link.target);
-                    return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2.4 : 1;
-                  }}
-                  linkDirectionalParticles={(link) => {
-                    const source = getLinkNodeId(link.source);
-                    const target = getLinkNodeId(link.target);
-                    return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2 : 0;
-                  }}
-                  linkDirectionalParticleWidth={2}
-                  cooldownTicks={100}
-                  d3VelocityDecay={0.26}
-                />
+                <div onMouseMove={handleGraphMouseMove}>
+                  <ForceGraph2D
+                    ref={graphRef}
+                    graphData={graphData}
+                    nodeLabel={labelsAlwaysVisible ? (node) => `${node.name} (${node.type})` : () => ''}
+                    linkLabel={edgeLabelsVisible ? (link) => `${link.type}${link.reason ? `: ${link.reason}` : ''}` : () => ''}
+                    onNodeClick={onNodeClick}
+                    onLinkClick={onLinkClick}
+                    onNodeHover={onNodeHover}
+                    onLinkHover={onLinkHover}
+                    nodeColor={(node) => {
+                      // === 1B: Click-to-Focus Mode - dim other nodes ===
+                      if (focusMode && highlightedNodeIds.length > 0) {
+                        if (highlightedNodeIds.includes(node.id)) {
+                          return '#f59e0b'; // Selected node - bright amber
+                        }
+                        if (secondDegreeNodes.has(node.id)) {
+                          return 'rgba(156, 163, 175, 0.6)'; // Second degree - semi-dim
+                        }
+                        // Check if it's a first-degree connection
+                        const isFirstDegree = linksWithMetadata.some(
+                          (l) =>
+                            (l.sourceId === highlightedNodeIds[0] && l.targetId === node.id) ||
+                            (l.targetId === highlightedNodeIds[0] && l.sourceId === node.id)
+                        );
+                        if (isFirstDegree) {
+                          return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown; // First degree - full opacity
+                        }
+                        return 'rgba(100, 116, 139, 0.3)'; // Others - very dim (30% opacity)
+                      }
+
+                      // Normal mode highlighting
+                      if (highlightedNodeIds.includes(node.id)) {
+                        return '#f59e0b';
+                      }
+                      return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
+                    }}
+                    // === 1E: Enhanced Node Sizing by Importance ===
+                    nodeVal={(node) => {
+                      const degree = degreeMap.get(node.id) ?? 0;
+                      const maxDegree = Math.max(...Array.from(degreeMap.values()));
+                      // Size range: 5 to 15 based on degree proportion
+                      const size = 5 + (degree / (maxDegree || 1)) * 10;
+                      return size;
+                    }}
+                    nodeCanvasObject={(node, ctx) => {
+                      // === 1B: Pulsing glow for selected node ===
+                      if (highlightedNodeIds.includes(node.id) && focusMode) {
+                        const pulse = Math.sin(Date.now() / 200) * 0.5 + 1.5;
+                        ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
+                        ctx.beginPath();
+                        ctx.arc(node.x, node.y, node.val * pulse, 0, 2 * Math.PI);
+                        ctx.fill();
+                      }
+                      // Draw the node
+                      ctx.fillStyle = node.color;
+                      ctx.beginPath();
+                      ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI);
+                      ctx.fill();
+                    }}
+                    linkColor={(link) => {
+                      const source = getLinkNodeId(link.source);
+                      const target = getLinkNodeId(link.target);
+
+                      if (focusMode && highlightedNodeIds.length > 0) {
+                        const isHighlighted =
+                          highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target);
+                        if (isHighlighted) {
+                          return '#0d9488';
+                        }
+                        return 'rgba(148, 163, 184, 0.2)'; // Very dim in focus mode
+                      }
+
+                      return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target)
+                        ? '#0d9488'
+                        : '#94a3b8';
+                    }}
+                    linkWidth={(link) => {
+                      const source = getLinkNodeId(link.source);
+                      const target = getLinkNodeId(link.target);
+                      return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2.4 : 1;
+                    }}
+                    linkDirectionalParticles={(link) => {
+                      const source = getLinkNodeId(link.source);
+                      const target = getLinkNodeId(link.target);
+                      return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2 : 0;
+                    }}
+                    linkDirectionalParticleWidth={2}
+                    cooldownTicks={physicsEnabled ? 100 : 0}
+                    d3VelocityDecay={0.26}
+                    dagMode={null}
+                    enableNodeDrag={!nodeDraggingLocked}
+                  />
+                </div>
               )}
             </div>
+            <button
+              onClick={() => setFocusMode(!focusMode)}
+              title={focusMode ? 'Exit focus mode' : 'Enter focus mode - click nodes to explore'}
+              className={`absolute bottom-4 right-4 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                focusMode
+                  ? 'bg-cyan-700 text-white shadow-lg'
+                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+              }`}
+            >
+              {focusMode ? '✓ Focus Mode' : 'Focus Mode'}
+            </button>
           </GlassCard>
 
           <div className="space-y-5 xl:col-span-4">
@@ -823,6 +1141,47 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* === NEW: Node Hover Tooltip (1A) === */}
+      {showNodeTooltip && hoveredNode && (
+        <NodeHoverTooltip
+          node={hoveredNode}
+          mouseX={mousePos.x}
+          mouseY={mousePos.y}
+          connectionCount={degreeMap.get(hoveredNode.id) ?? 0}
+          connectedNames={
+            linksWithMetadata
+              .filter((l) => l.sourceId === hoveredNode.id || l.targetId === hoveredNode.id)
+              .map((l) => (l.sourceId === hoveredNode.id ? nodeMap.get(l.targetId)?.name : nodeMap.get(l.sourceId)?.name))
+              .filter(Boolean)
+              .slice(0, 3)
+          }
+        />
+      )}
+
+      {/* === NEW: Edge Hover Tooltip (1C) === */}
+      {showEdgeTooltip && hoveredEdge && (
+        <EdgeHoverTooltip
+          edge={hoveredEdge}
+          mouseX={mousePos.x}
+          mouseY={mousePos.y}
+          fromName={nodeMap.get(getLinkNodeId(hoveredEdge.source))?.name ?? 'Unknown'}
+          toName={nodeMap.get(getLinkNodeId(hoveredEdge.target))?.name ?? 'Unknown'}
+        />
+      )}
+
+      {/* === NEW: Graph Controls Panel (1D) === */}
+      <GraphControlsPanel
+        physicsEnabled={physicsEnabled}
+        setPhysicsEnabled={setPhysicsEnabled}
+        labelsAlwaysVisible={labelsAlwaysVisible}
+        setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+        edgeLabelsVisible={edgeLabelsVisible}
+        setEdgeLabelsVisible={setEdgeLabelsVisible}
+        nodeDraggingLocked={nodeDraggingLocked}
+        setNodeDraggingLocked={setNodeDraggingLocked}
+        graphRef={graphRef}
+      />
     </div>
   );
 }
