@@ -3,6 +3,17 @@ FastAPI backend for querying the legal knowledge graph.
 Provides endpoints for contradiction detection, entity search, and graph analysis.
 """
 
+import socket
+
+original_getaddrinfo = socket.getaddrinfo
+
+
+def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+    return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+
+socket.getaddrinfo = getaddrinfo_ipv4
+
 import os
 from typing import List, Dict, Optional
 
@@ -12,8 +23,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
+import requests
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 # ============================================================================
@@ -64,6 +76,11 @@ class GraphView(BaseModel):
     links: List[GraphLink]
 
 
+class QueryRequest(BaseModel):
+    """Request model for natural language Q&A."""
+    query: str
+
+
 # ============================================================================
 # Neo4j Connection
 # ============================================================================
@@ -103,6 +120,26 @@ if trust_all_certs and uri:
         uri = uri.replace("bolt+s://", "bolt+ssc://", 1)
 
 driver = GraphDatabase.driver(uri, auth=(user, password)) if uri and user and password else None
+
+print("=" * 60)
+print("🔍 NEO4J CONNECTION DEBUG")
+print("=" * 60)
+print(f"URI: {uri}")
+print(f"User: {user}")
+print(f"Password exists: {bool(password)}")
+print(f"Driver created: {driver is not None}")
+
+if driver:
+    try:
+        with driver.session() as test_session:
+            test_session.run("RETURN 1 AS test").single()
+            print("✅ Neo4j connection test: SUCCESS")
+    except Exception as e:
+        print(f"❌ Neo4j connection test FAILED: {e}")
+        print(f"❌ Error type: {type(e).__name__}")
+else:
+    print("❌ Driver was not created - check .env credentials")
+print("=" * 60)
 
 
 # ============================================================================
@@ -462,6 +499,154 @@ async def analyze_clauses(clauses: List[str]):
                     })
             
             return analysis
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Natural Language Q&A
+# ============================================================================
+
+@app.post("/api/query")
+async def query_contract(request: QueryRequest):
+    """
+    Natural language Q&A about the legal document.
+    Uses graph context + LLM reasoning.
+    """
+    if not driver:
+        raise HTTPException(status_code=500, detail="Neo4j not configured")
+    
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    try:
+        # Step 1: Extract keywords from question
+        keywords = query.lower().split()
+        # Remove common stop words
+        stop_words = {'are', 'is', 'the', 'a', 'an', 'and', 'or', 'in', 'of', 'to', 'for', 'with', 'this', 'that', 'what', 'when', 'where', 'how', 'why', 'does', 'do', 'did', 'can', 'any', 'there'}
+        keywords = [k for k in keywords if k not in stop_words and len(k) > 2]
+        
+        with driver.session() as session:
+            # Step 2: Find matching entities based on keywords
+            result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE ANY(word IN $keywords WHERE toLower(e.name) CONTAINS word 
+                       OR toLower(e.description) CONTAINS word)
+                RETURN e.key AS key, e.name AS name, e.type AS type, e.description AS description
+                LIMIT 15
+                """,
+                {"keywords": keywords}
+            )
+            entities = [dict(record) for record in result]
+            
+            if not entities:
+                return {
+                    "answer": "I couldn't find any relevant entities for your question. Try asking about specific parties, clauses, dates, or obligations mentioned in the document.",
+                    "sources": [],
+                    "relationships": [],
+                    "graph_nodes": []
+                }
+            
+            # Step 3: Get relationships for these entities
+            entity_keys = [e['key'] for e in entities]
+            result = session.run(
+                """
+                MATCH (a:Entity)-[r:RELATES_TO]->(b:Entity)
+                WHERE a.key IN $keys OR b.key IN $keys
+                RETURN a.name AS from_name, b.name AS to_name, 
+                       r.relation AS relation, r.reason AS reason
+                LIMIT 20
+                """,
+                {"keys": entity_keys}
+            )
+            relationships = [dict(record) for record in result]
+        
+        # Step 4: Build context from graph data
+        context = "Based on the legal document:\n\n"
+        context += "Entities:\n"
+        for e in entities:
+            context += f"- {e['name']} ({e['type']}): {e['description']}\n"
+        
+        if relationships:
+            context += "\nRelationships:\n"
+            for r in relationships:
+                context += f"- {r['from_name']} {r['relation']} {r['to_name']}"
+                if r['reason']:
+                    context += f": {r['reason']}"
+                context += "\n"
+        
+        # Step 5: Send to Gemini for reasoning
+        gemini_api_key = os.getenv('GEMINI_API_KEY')
+        if not gemini_api_key:
+            return {
+                "answer": f"Based on the document context:\n\n{context}\n\n(Note: Gemini API is not configured for full reasoning. Showing raw data instead.)",
+                "sources": entities,
+                "relationships": relationships,
+                "graph_nodes": entity_keys
+            }
+        
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_api_key}"
+        
+        prompt = f"""You are a legal document analyst. Answer the user's question using ONLY the provided context.
+
+Context from legal document:
+{context}
+
+User Question: {query}
+
+Instructions:
+- Answer ONLY based on the context provided
+- If you find contradictions, explain them clearly
+- Cite specific entities/clauses
+- If the context doesn't contain enough info, say so
+- Keep response concise and clear
+
+Answer:"""
+        
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+        
+        try:
+            response = requests.post(gemini_url, json=payload, timeout=30)
+            if response.status_code == 200:
+                result = response.json()
+                candidates = result.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts and parts[0].get("text"):
+                        return {
+                            "answer": parts[0]["text"],
+                            "sources": entities,
+                            "relationships": relationships,
+                            "graph_nodes": entity_keys
+                        }
+
+            # Graceful fallback when Gemini is rate-limited or returns invalid payload.
+            return {
+                "answer": (
+                    "Gemini is temporarily unavailable. Here is the best answer from graph data only:\n\n"
+                    f"{context}"
+                ),
+                "sources": entities,
+                "relationships": relationships,
+                "graph_nodes": entity_keys
+            }
+        except requests.RequestException:
+            return {
+                "answer": (
+                    "Gemini request failed. Here is the best answer from graph data only:\n\n"
+                    f"{context}"
+                ),
+                "sources": entities,
+                "relationships": relationships,
+                "graph_nodes": entity_keys
+            }
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -119,6 +119,15 @@ RULES:
             
             # Parse JSON
             data = json.loads(response_text)
+
+            # Normalize unexpected Gemini responses so bad chunks don't crash the run
+            if not isinstance(data, dict):
+                raise ValueError("Gemini response JSON must be an object")
+
+            if 'nodes' not in data:
+                data['nodes'] = []
+            if 'edges' not in data:
+                data['edges'] = []
             
             # Add chunk_id to metadata
             data['chunk_id'] = chunk_id

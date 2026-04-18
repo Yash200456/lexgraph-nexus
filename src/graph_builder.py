@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _get_env_value(*names: str) -> str:

@@ -54,6 +54,7 @@ import {
   YAxis,
 } from 'recharts';
 import './styles.css';
+import ChatInterface from './components/ChatInterface';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -591,6 +592,9 @@ export default function App() {
   const [labelsAlwaysVisible, setLabelsAlwaysVisible] = useState(false);
   const [edgeLabelsVisible, setEdgeLabelsVisible] = useState(false);
   const [nodeDraggingLocked, setNodeDraggingLocked] = useState(false);
+
+  // === Chat Q&A Integration ===
+  const [chatHighlightedNodes, setChatHighlightedNodes] = useState([]);
 
   // === NEW: Task 2 - Micro-Animations & Polish ===
   const [pageLoadComplete, setPageLoadComplete] = useState(false);
@@ -1378,6 +1382,13 @@ export default function App() {
     setHighlightedNodeIds([sourceId, targetId]);
   };
 
+  const handleChatQuery = (nodeKeys) => {
+    // Highlight nodes from chat query results in the graph
+    setChatHighlightedNodes(nodeKeys);
+    setHighlightedNodeIds(nodeKeys);
+    pushToast('info', `Highlighted ${nodeKeys.length} entities from your query`);
+  };
+
   const onPieSliceClick = (entry) => {
     if (!entry?.name) {
       return;
@@ -2010,6 +2021,70 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {/* === NEW: Chat Q&A + Graph Split Screen (Evidence Board) === */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+              {/* Chat Interface */}
+              <div className="h-[600px]">
+                <ChatInterface onQuery={handleChatQuery} />
+              </div>
+
+              {/* Quick Reference - Top Entities & Relations */}
+              <div className="h-[600px] rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 overflow-hidden shadow-lg">
+                <div className="h-full flex flex-col">
+                  <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-slate-800 dark:to-slate-800">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">📊 Entities & Relationships</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Chat results will highlight related items</p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {chatHighlightedNodes.length > 0 ? (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">🔍 Referenced Entities ({chatHighlightedNodes.length})</p>
+                        <div className="space-y-2">
+                          {nodes
+                            .filter(n => chatHighlightedNodes.includes(n.id))
+                            .slice(0, 8)
+                            .map((node) => (
+                              <div
+                                key={node.id}
+                                className="p-2 rounded bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 cursor-pointer hover:shadow-md transition"
+                                onClick={() => {
+                                  setHighlightedNodeIds([node.id]);
+                                  setSelectedEntity(node);
+                                }}
+                              >
+                                <div className="font-medium text-sm text-gray-900 dark:text-white">{node.name}</div>
+                                <div className="text-xs text-gray-600 dark:text-gray-400">{node.type}</div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                        <p className="text-sm">Ask a question in the chat to see highlighted entities here</p>
+                      </div>
+                    )}
+
+                    {/* Top Entities by Connections */}
+                    {chatHighlightedNodes.length === 0 && (
+                      <>
+                        <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">⭐ Top Entities</p>
+                          <div className="space-y-2">
+                            {nodes.slice(0, 5).map((node) => (
+                              <div key={node.id} className="text-xs p-2 rounded bg-slate-100 dark:bg-slate-800 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition">
+                                <div className="font-medium text-gray-900 dark:text-white">{node.name}</div>
+                                <div className="text-gray-600 dark:text-gray-400">{node.type}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_240px]">
               <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
