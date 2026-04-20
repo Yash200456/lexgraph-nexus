@@ -3,18 +3,8 @@ FastAPI backend for querying the legal knowledge graph.
 Provides endpoints for contradiction detection, entity search, and graph analysis.
 """
 
-import socket
-
-original_getaddrinfo = socket.getaddrinfo
-
-
-def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
-    return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
-
-socket.getaddrinfo = getaddrinfo_ipv4
-
 import os
+import re
 from typing import List, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -79,6 +69,74 @@ class GraphView(BaseModel):
 class QueryRequest(BaseModel):
     """Request model for natural language Q&A."""
     query: str
+
+
+def _is_date_like(text: str) -> bool:
+    if not text:
+        return False
+    value = text.strip()
+    if re.search(r"\b\d{4}-\d{2}-\d{2}\b", value):
+        return True
+    if re.search(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", value):
+        return True
+    if re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\w*\b", value, re.IGNORECASE):
+        return True
+    if "date" in value.lower() or "term" in value.lower() or "expire" in value.lower():
+        return True
+    return False
+
+
+def _compact_graph_context(entities: List[Dict], relationships: List[Dict]) -> str:
+    entity_lines = []
+    for e in entities[:8]:
+        entity_lines.append(f"- {e['name']} ({e['type']}): {e.get('description', '').strip()[:120]}")
+
+    rel_lines = []
+    for r in relationships[:8]:
+        reason = (r.get("reason") or "").strip()
+        reason_suffix = f" ({reason[:110]})" if reason else ""
+        rel_lines.append(f"- {r['from_name']} {r['relation']} {r['to_name']}{reason_suffix}")
+
+    sections = ["Graph evidence:"]
+    if entity_lines:
+        sections.append("Entities:")
+        sections.extend(entity_lines)
+    if rel_lines:
+        sections.append("Relationships:")
+        sections.extend(rel_lines)
+
+    return "\n".join(sections)
+
+
+def _heuristic_fallback_answer(query: str, entities: List[Dict], relationships: List[Dict]) -> str:
+    q = query.lower()
+    direct_answer = "I could not find a direct answer in the graph evidence yet."
+
+    if any(token in q for token in ["expire", "expiry", "expiration", "end date", "term", "terminate"]):
+        date_candidates = [e for e in entities if e.get("type") == "Date" or _is_date_like(e.get("name", ""))]
+        if date_candidates:
+            direct_answer = f"Possible relevant date/term reference: {date_candidates[0].get('name', 'Not specified')}"
+        else:
+            term_clause = next((e for e in entities if _is_date_like(e.get("description", ""))), None)
+            if term_clause:
+                direct_answer = f"A likely term-related clause is: {term_clause.get('name', 'Unknown clause')}"
+
+    evidence_entities = [f"- {e['name']} ({e['type']})" for e in entities[:5]]
+    evidence_rels = [f"- {r['from_name']} {r['relation']} {r['to_name']}" for r in relationships[:5]]
+
+    lines = [
+        f"Direct answer: {direct_answer}",
+        "",
+        "Top evidence:",
+    ]
+    if evidence_entities:
+        lines.extend(evidence_entities)
+    if evidence_rels:
+        lines.append("")
+        lines.append("Key relationships:")
+        lines.extend(evidence_rels)
+
+    return "\n".join(lines)
 
 
 # ============================================================================
@@ -563,19 +621,8 @@ async def query_contract(request: QueryRequest):
             )
             relationships = [dict(record) for record in result]
         
-        # Step 4: Build context from graph data
-        context = "Based on the legal document:\n\n"
-        context += "Entities:\n"
-        for e in entities:
-            context += f"- {e['name']} ({e['type']}): {e['description']}\n"
-        
-        if relationships:
-            context += "\nRelationships:\n"
-            for r in relationships:
-                context += f"- {r['from_name']} {r['relation']} {r['to_name']}"
-                if r['reason']:
-                    context += f": {r['reason']}"
-                context += "\n"
+        # Step 4: Build compact context from graph data
+        context = _compact_graph_context(entities, relationships)
         
         # Step 5: Send to Gemini for reasoning
         gemini_api_key = os.getenv('GEMINI_API_KEY')
@@ -587,8 +634,11 @@ async def query_contract(request: QueryRequest):
                 "graph_nodes": entity_keys
             }
         
-        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_api_key}"
-        
+        model_candidates = [
+            os.getenv("GEMINI_QUERY_MODEL", "gemini-2.0-flash").strip(),
+            "gemini-1.5-flash",
+        ]
+
         prompt = f"""You are a legal document analyst. Answer the user's question using ONLY the provided context.
 
 Context from legal document:
@@ -597,11 +647,10 @@ Context from legal document:
 User Question: {query}
 
 Instructions:
-- Answer ONLY based on the context provided
-- If you find contradictions, explain them clearly
-- Cite specific entities/clauses
-- If the context doesn't contain enough info, say so
-- Keep response concise and clear
+    - Start with one line: "Direct answer: ..."
+    - Then add at most 5 short bullet points of evidence
+    - If answer is uncertain, state uncertainty briefly
+    - Never write long paragraphs
 
 Answer:"""
         
@@ -611,41 +660,38 @@ Answer:"""
             }]
         }
         
-        try:
-            response = requests.post(gemini_url, json=payload, timeout=30)
-            if response.status_code == 200:
+        for model_name in model_candidates:
+            if not model_name:
+                continue
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
+            try:
+                response = requests.post(gemini_url, json=payload, timeout=30)
+                if response.status_code != 200:
+                    continue
+
                 result = response.json()
                 candidates = result.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts and parts[0].get("text"):
-                        return {
-                            "answer": parts[0]["text"],
-                            "sources": entities,
-                            "relationships": relationships,
-                            "graph_nodes": entity_keys
-                        }
+                if not candidates:
+                    continue
 
-            # Graceful fallback when Gemini is rate-limited or returns invalid payload.
-            return {
-                "answer": (
-                    "Gemini is temporarily unavailable. Here is the best answer from graph data only:\n\n"
-                    f"{context}"
-                ),
-                "sources": entities,
-                "relationships": relationships,
-                "graph_nodes": entity_keys
-            }
-        except requests.RequestException:
-            return {
-                "answer": (
-                    "Gemini request failed. Here is the best answer from graph data only:\n\n"
-                    f"{context}"
-                ),
-                "sources": entities,
-                "relationships": relationships,
-                "graph_nodes": entity_keys
-            }
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts and parts[0].get("text"):
+                    return {
+                        "answer": parts[0]["text"].strip(),
+                        "sources": entities,
+                        "relationships": relationships,
+                        "graph_nodes": entity_keys,
+                    }
+            except requests.RequestException:
+                continue
+
+        # Graceful concise fallback when Gemini is unavailable.
+        return {
+            "answer": _heuristic_fallback_answer(query, entities, relationships),
+            "sources": entities,
+            "relationships": relationships,
+            "graph_nodes": entity_keys,
+        }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

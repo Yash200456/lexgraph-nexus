@@ -84,14 +84,20 @@ export default function ChatInterface({ onQuery }) {
       {/* Messages Container */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
         {messages.length === 0 && (
-          <div className="text-center text-gray-500 dark:text-gray-400 mt-8">
-            <p className="text-lg font-medium mb-4">Ask me anything about the contract:</p>
-            <div className="space-y-2 text-sm bg-blue-50 dark:bg-blue-950 rounded-lg p-4 inline-block">
-              <p className="text-gray-700 dark:text-gray-300">• "Are there any contradictions?"</p>
-              <p className="text-gray-700 dark:text-gray-300">• "What are the consultant's obligations?"</p>
-              <p className="text-gray-700 dark:text-gray-300">• "Who are the parties?"</p>
-              <p className="text-gray-700 dark:text-gray-300">• "When does this agreement expire?"</p>
-              <p className="text-gray-700 dark:text-gray-300">• "What are the payment terms?"</p>
+          <div className="mt-10 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center dark:border-slate-700 dark:bg-slate-900/40">
+            <p className="text-lg font-semibold text-slate-900 dark:text-white">Ask your first question about the contract</p>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Use the graph context to surface contradictions, obligations, and key entities.</p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+              {[
+                'Are there any contradictions?',
+                "What are the consultant's obligations?",
+                'Who are the parties?',
+                'When does this agreement expire?',
+              ].map((prompt) => (
+                <span key={prompt} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 shadow-sm dark:border-slate-700 dark:bg-slate-950/70">
+                  {prompt}
+                </span>
+              ))}
             </div>
           </div>
         )}
@@ -158,9 +164,14 @@ export default function ChatInterface({ onQuery }) {
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-gray-100 dark:bg-gray-800 rounded-lg rounded-bl-none p-4 flex items-center gap-2">
+            <div className="flex items-center gap-3 rounded-lg rounded-bl-none bg-gray-100 p-4 dark:bg-gray-800">
               <Loader className="w-4 h-4 animate-spin text-teal-600" />
-              <span className="text-sm text-gray-600 dark:text-gray-400">Analyzing your question...</span>
+              <span className="text-sm text-gray-600 dark:text-gray-300">AI is thinking</span>
+              <span className="flex items-center gap-1">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-teal-500 [animation-delay:-0.2s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-teal-500 [animation-delay:-0.1s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-teal-500" />
+              </span>
             </div>
           </div>
         )}

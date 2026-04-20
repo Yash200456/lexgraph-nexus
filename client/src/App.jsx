@@ -2,10 +2,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import {
   AlertCircle,
+  Activity,
   BarChart3,
   Building2,
   CalendarDays,
+  Clock,
   ChevronRight,
+  Home,
   Download,
   Filter,
   File,
@@ -20,7 +23,9 @@ import {
   Route,
   Save,
   Search,
+  MessageSquare,
   Share2,
+  Shield,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -75,11 +80,24 @@ const FILTERS = [
 ];
 
 const MAIN_TABS = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'qa', label: 'Q&A Explorer' },
-  { key: 'analytics', label: 'Analytics' },
-  { key: 'advanced', label: 'Advanced Tools' },
+  { key: 'dashboard', label: 'Dashboard', icon: Home },
+  { key: 'qa', label: 'Q&A Explorer', icon: MessageSquare },
+  { key: 'graph', label: 'Graph', icon: Link2 },
+  { key: 'analytics', label: 'Analytics', icon: BarChart3 },
+  { key: 'advanced', label: 'Advanced Tools', icon: Wand2 },
 ];
+
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return 'Never';
+  const diffMs = Date.now() - timestamp;
+  const minutes = Math.max(0, Math.floor(diffMs / 60000));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
 
 function getLinkNodeId(value) {
   if (typeof value === 'string' || typeof value === 'number') {
@@ -422,16 +440,11 @@ function SkeletonStatCard() {
 
 function SkeletonGraphArea() {
   return (
-    <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
-      <div className="flex h-full items-center justify-center">
-        <div className="space-y-4">
-          <div className="flex gap-4">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="skeleton h-16 w-16 rounded-full" />
-            ))}
-          </div>
-          <div className="skeleton-pulse text-center text-sm text-slate-400">Loading graph...</div>
-        </div>
+    <div className="flex h-[520px] items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
+      <div className="text-center">
+        <Loader className="mx-auto mb-3 h-7 w-7 animate-spin text-cyan-600 dark:text-cyan-300" />
+        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Loading knowledge graph...</p>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Building entities, links, and interactive evidence nodes</p>
       </div>
     </div>
   );
@@ -439,8 +452,11 @@ function SkeletonGraphArea() {
 
 function SkeletonChartArea() {
   return (
-    <div className="h-72 space-y-3">
-      <div className="skeleton-loading-bar h-full rounded-lg" />
+    <div className="h-72 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+      <div className="h-full space-y-3">
+        <div className="skeleton h-4 w-32 rounded" />
+        <div className="skeleton h-full rounded-xl" />
+      </div>
     </div>
   );
 }
@@ -617,8 +633,9 @@ export default function App() {
   const [graphViewBounds, setGraphViewBounds] = useState({ minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity });
   const [graphZoomLevel, setGraphZoomLevel] = useState(1);
   const [isMobileView, setIsMobileView] = useState(false);
-  const [qaMobilePanel, setQaMobilePanel] = useState('chat');
   const [showMobileControls, setShowMobileControls] = useState(false);
+  const [showGraphControls, setShowGraphControls] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
   // === NEW: Task 8 - Advanced Features ===
   const [timeTravelChunk, setTimeTravelChunk] = useState(40);
@@ -664,9 +681,11 @@ export default function App() {
   }, [isMobileView]);
 
   useEffect(() => {
+    if (activeTab !== 'graph') {
+      setShowGraphControls(false);
+    }
     if (activeTab !== 'qa') {
       setShowMobileControls(false);
-      setQaMobilePanel('chat');
     }
   }, [activeTab]);
 
@@ -778,6 +797,7 @@ export default function App() {
       setLinks(incomingLinks);
       setEntities(normalizedEntities.length ? normalizedEntities : incomingNodes);
       setContradictions(Array.isArray(contradictionsRes) ? contradictionsRes : []);
+      setLastUpdatedAt(Date.now());
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to load data';
       setError(msg);
@@ -1069,6 +1089,93 @@ export default function App() {
       .sort((a, b) => b.connections - a.connections)
       .slice(0, 8);
   }, [nodes, degreeMap]);
+
+  const mostConnectedEntity = topConnectedEntities[0] || null;
+  const detectedChunkMax = Math.max(1, ...nodes.map((node) => extractChunkIndex(node)));
+  const documentCoverage = `${Math.min(timeTravelChunk, Math.max(40, detectedChunkMax))}/${Math.max(40, detectedChunkMax)} chunks processed`;
+  const quickInsights = [
+    {
+      label: 'Most Connected',
+      value: mostConnectedEntity ? mostConnectedEntity.name : 'N/A',
+      description: mostConnectedEntity
+        ? `${mostConnectedEntity.connections} connections`
+        : 'No entities available yet',
+    },
+    {
+      label: 'Coverage',
+      value: documentCoverage,
+      description: 'Processed contract chunks in graph timeline',
+    },
+    {
+      label: 'Last Updated',
+      value: formatRelativeTime(lastUpdatedAt),
+      description: 'Latest successful dashboard sync',
+    },
+    {
+      label: 'Graph Density',
+      value: `${links.length}`,
+      description: `${nodes.length} entities connected by ${links.length} relationships`,
+    },
+  ];
+
+  const recentActivityFeed = useMemo(() => {
+    const feed = [];
+    const firstEntity = entities[0] || nodes[0];
+    const secondEntity = entities[1] || nodes[1];
+    const firstLink = linksWithMetadata[0];
+    const secondLink = linksWithMetadata[1];
+    const firstContradiction = contradictions[0];
+
+    if (firstEntity) {
+      feed.push({
+        label: 'Entity extracted',
+        note: firstEntity.name,
+        time: formatRelativeTime(lastUpdatedAt),
+      });
+    }
+    if (secondEntity) {
+      feed.push({
+        label: 'Entity extracted',
+        note: secondEntity.name,
+        time: formatRelativeTime(lastUpdatedAt),
+      });
+    }
+    if (firstLink) {
+      const sourceName = nodeMap.get(firstLink.sourceId)?.name || firstLink.sourceId;
+      const targetName = nodeMap.get(firstLink.targetId)?.name || firstLink.targetId;
+      feed.push({
+        label: 'Relationship found',
+        note: `${sourceName} → ${firstLink.type} → ${targetName}`,
+        time: formatRelativeTime(lastUpdatedAt),
+      });
+    }
+    if (secondLink) {
+      const sourceName = nodeMap.get(secondLink.sourceId)?.name || secondLink.sourceId;
+      const targetName = nodeMap.get(secondLink.targetId)?.name || secondLink.targetId;
+      feed.push({
+        label: 'Relationship found',
+        note: `${sourceName} → ${secondLink.type} → ${targetName}`,
+        time: formatRelativeTime(lastUpdatedAt),
+      });
+    }
+    if (firstContradiction) {
+      const a = firstContradiction.clause_a || firstContradiction.clause1 || firstContradiction.source || 'Unknown';
+      const b = firstContradiction.clause_b || firstContradiction.clause2 || firstContradiction.target || 'Unknown';
+      feed.push({
+        label: 'Contradiction detected',
+        note: `${a} vs ${b}`,
+        time: formatRelativeTime(lastUpdatedAt),
+      });
+    }
+
+    return feed.slice(0, 5);
+  }, [entities, nodes, linksWithMetadata, contradictions, nodeMap, lastUpdatedAt]);
+
+  const systemHealth = useMemo(() => ({
+    coverage: `${Math.round((nodes.length / Math.max(1, entities.length || nodes.length)) * 100)}%`,
+    relationships: `${links.length} active links`,
+    freshness: formatRelativeTime(lastUpdatedAt),
+  }), [entities.length, links.length, nodes.length, lastUpdatedAt]);
 
   const heatmapData = useMemo(() => {
     const types = [...new Set(nodes.map((n) => n.type))].sort();
@@ -1823,10 +1930,10 @@ export default function App() {
       </header>
 
       <main
-        className="relative mx-auto w-full max-w-7xl px-4 py-6 pb-24 sm:px-6 lg:px-8 md:pb-6"
+        className="relative mx-auto w-full max-w-7xl px-4 py-6 pb-28 sm:px-6 lg:px-8 md:pb-6"
       >
-        <GlassCard className="mb-5 p-2">
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <GlassCard className="mb-5 hidden p-2 md:block">
+          <div className="grid grid-cols-5 gap-2">
             {MAIN_TABS.map((tab) => {
               const active = activeTab === tab.key;
               return (
@@ -1847,77 +1954,146 @@ export default function App() {
         </GlassCard>
 
         {activeTab === 'dashboard' && (
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-            <GlassCard className="p-4 lg:col-span-2">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-bold">Quick Insights</h2>
-                <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[11px] font-semibold text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200">
-                  Live Snapshot
+          <div className={`space-y-5 ${pageLoadComplete ? 'animate-sidebar-enter' : ''}`}>
+            <GlassCard className="p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold">Dashboard</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Snapshot of document coverage, entity activity, and system health.</p>
+                </div>
+                <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-200">
+                  {loading ? 'Syncing data' : `${nodes.length} entities loaded`}
                 </span>
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Top Entities</p>
-                  <div className="space-y-2">
-                    {topConnectedEntities.slice(0, 5).map((entity) => (
-                      <button
-                        key={entity.id}
-                        onClick={() => highlightNodeInGraph(entity.id)}
-                        className="flex w-full items-center justify-between rounded-lg bg-white px-2 py-1.5 text-left text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-                      >
-                        <span className="truncate pr-2">{entity.name}</span>
-                        <span className="text-cyan-700 dark:text-cyan-300">{entity.connections}</span>
-                      </button>
-                    ))}
+
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {quickInsights.slice(0, 4).map((item) => (
+                  <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">{item.label}</p>
+                    <p className="mt-2 text-2xl font-black text-slate-900 dark:text-white">{item.value}</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.description}</p>
                   </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Recent Activity</p>
-                  <div className="space-y-2 text-xs text-slate-600 dark:text-slate-300">
-                    {searchHistory.length === 0 && savedViews.length === 0 ? (
-                      <p>No user actions recorded yet.</p>
-                    ) : (
-                      <>
-                        {searchHistory.slice(0, 3).map((item) => (
-                          <p key={`hist-${item}`}>Search: {item}</p>
-                        ))}
-                        {savedViews.slice(0, 2).map((view) => (
-                          <p key={`view-${view.id}`}>Saved view: {view.label}</p>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </div>
+                ))}
               </div>
             </GlassCard>
 
-            <GlassCard className="p-4">
-              <h2 className="mb-3 text-lg font-bold">System Health</h2>
-              <div className="space-y-2">
-                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <p className="text-xs text-slate-500">Backend Connectivity</p>
-                  <p className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">{error ? 'Degraded' : 'Healthy'}</p>
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+              <GlassCard className="p-4 xl:col-span-2">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Recent Activity</h3>
+                  <Clock className="h-4 w-4 text-slate-400" />
                 </div>
-                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <p className="text-xs text-slate-500">Graph Data Loaded</p>
-                  <p className="mt-1 font-semibold text-cyan-700 dark:text-cyan-300">{filteredNodes.length} nodes / {filteredLinks.length} links</p>
+                {recentActivityFeed.length === 0 ? (
+                  <EmptyBlock icon={Activity} title="Nothing yet" subtitle="Upload a document or ask a question to populate the activity feed." />
+                ) : (
+                  <div className="space-y-3">
+                    {loading && (
+                      <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700 dark:border-cyan-900/40 dark:bg-cyan-950/30 dark:text-cyan-200">
+                        Refreshing live activity...
+                      </div>
+                    )}
+                    {recentActivityFeed.slice(0, 5).map((entry) => (
+                      <div key={`${entry.label}-${entry.note}`} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950/70">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{entry.label}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{entry.note}</p>
+                          </div>
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-200">{entry.time}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </GlassCard>
+
+              <GlassCard className="p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">System Health</h3>
+                  <Shield className="h-4 w-4 text-slate-400" />
                 </div>
-                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-                  <p className="text-xs text-slate-500">Contradiction Alerts</p>
-                  <p className="mt-1 font-semibold text-rose-700 dark:text-rose-300">{contradictions.length} detected</p>
+                <div className="space-y-3 text-sm">
+                  {loading && (
+                    <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700 dark:border-cyan-900/40 dark:bg-cyan-950/30 dark:text-cyan-200">
+                      Updating system metrics...
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/60">
+                    <span className="text-slate-500 dark:text-slate-400">Coverage</span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{systemHealth.coverage}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/60">
+                    <span className="text-slate-500 dark:text-slate-400">Relationships</span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{systemHealth.relationships}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/60">
+                    <span className="text-slate-500 dark:text-slate-400">Graph Freshness</span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{systemHealth.freshness}</span>
+                  </div>
                 </div>
-              </div>
-            </GlassCard>
+              </GlassCard>
+            </div>
           </div>
         )}
 
-        {(activeTab === 'qa' || activeTab === 'advanced') && (
-        <div className="grid grid-cols-1 gap-5">
-          {activeTab === 'qa' && <GlassCard className={`p-4 ${pageLoadComplete ? 'animate-graph-enter' : ''}`}>
+        {activeTab === 'qa' && (
+          <GlassCard className={`p-4 ${pageLoadComplete ? 'animate-graph-enter' : ''}`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold">Q&A Explorer Evidence Board</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Split-screen workflow: ask questions on the left, explore linked graph evidence on the right.</p>
+                <h2 className="text-lg font-bold">Q&A Explorer</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Ask questions here. Open the Graph tab to inspect the evidence network.</p>
+              </div>
+              <button
+                onClick={() => setActiveTab('graph')}
+                className="rounded-lg bg-cyan-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-cyan-800"
+              >
+                Open Graph
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+              <div className="min-h-[620px]">
+                <ChatInterface onQuery={handleChatQuery} />
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Highlighted Entities</h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Chat queries highlight these nodes in the Graph tab.</p>
+                <div className="mt-4 space-y-2">
+                  {chatHighlightedNodes.length === 0 ? (
+                    <EmptyBlock icon={MessageSquare} title="Ask your first question about the contract" subtitle="Highlights will appear here after the AI responds." />
+                  ) : (
+                    nodes
+                      .filter((node) => chatHighlightedNodes.includes(node.id))
+                      .slice(0, 8)
+                      .map((node) => (
+                        <button
+                          key={node.id}
+                          onClick={() => {
+                            highlightNodeInGraph(node.id);
+                            setActiveTab('graph');
+                          }}
+                          className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left shadow-sm transition hover:border-cyan-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-950/70"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{node.name}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{node.type}</p>
+                          </div>
+                          <ChevronRight className="h-4 w-4 text-slate-400" />
+                        </button>
+                      ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </GlassCard>
+        )}
+
+        {activeTab === 'graph' && (
+          <GlassCard className={`p-4 ${pageLoadComplete ? 'animate-graph-enter' : ''}`}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold">Graph Workspace</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Dedicated space for the evidence graph and its controls.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1936,8 +2112,8 @@ export default function App() {
               </div>
             </div>
 
-            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-              <div className="relative md:col-span-2">
+            <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
                   value={searchQuery}
@@ -2088,43 +2264,26 @@ export default function App() {
               </div>
             )}
 
-            {isMobileView && (
-              <div className="mb-3 grid grid-cols-2 gap-2 md:hidden">
-                <button
-                  onClick={() => setQaMobilePanel('chat')}
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                    qaMobilePanel === 'chat'
-                      ? 'bg-cyan-700 text-white'
-                      : 'border border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                  }`}
-                >
-                  Chat
-                </button>
-                <button
-                  onClick={() => setQaMobilePanel('graph')}
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                    qaMobilePanel === 'graph'
-                      ? 'bg-cyan-700 text-white'
-                      : 'border border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                  }`}
-                >
-                  Graph
-                </button>
-              </div>
-            )}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:min-h-[72vh]">
+              <div className="min-h-[620px] rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                <div className="flex h-full min-h-[580px] flex-col gap-4">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/60">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Graph Workspace</p>
+                        <h3 className="text-base font-semibold text-slate-900 dark:text-white">Evidence Graph</h3>
+                      </div>
+                      <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-semibold text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-200">
+                        {graphData.nodes.length} nodes
+                      </span>
+                    </div>
+                  </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:h-[72vh]">
-              <div className={`${isMobileView && qaMobilePanel !== 'chat' ? 'hidden' : ''} h-[68vh] min-h-[460px] md:h-[620px] lg:h-full`}>
-                <ChatInterface onQuery={handleChatQuery} />
-              </div>
-
-              <div className={`${isMobileView && qaMobilePanel !== 'graph' ? 'hidden' : ''} relative h-[68vh] min-h-[460px] rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 md:h-[620px] lg:h-full`}>
-                <div className="relative flex h-full flex-col">
-                  <div className="relative flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
+                  <div className="relative min-h-[470px] flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
                     {loading && nodes.length === 0 ? (
                       <SkeletonGraphArea />
                     ) : graphData.nodes.length === 0 ? (
-                      <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
+                      <EmptyBlock icon={Link2} title="Your knowledge graph will appear here" subtitle="Upload a document to start building relationships." />
                     ) : (
                       <div className="h-full" onMouseMove={handleGraphMouseMove}>
                         <MemoForceGraph2D
@@ -2145,45 +2304,30 @@ export default function App() {
                           nodeVisibility={isNodeVisible}
                           linkVisibility={isLinkVisible}
                           nodeColor={(node) => {
-                            const isComparisonNode =
-                              node.id && (node.id === comparisonSelection.a || node.id === comparisonSelection.b);
+                            const isComparisonNode = node.id && (node.id === comparisonSelection.a || node.id === comparisonSelection.b);
                             const isPathNode = highlightedPathNodeIds.includes(node.id);
 
-                            if (isComparisonNode) {
-                              return '#7c3aed';
-                            }
-                            if (isPathNode) {
-                              return '#dc2626';
-                            }
+                            if (isComparisonNode) return '#7c3aed';
+                            if (isPathNode) return '#dc2626';
 
                             if (focusMode && highlightedNodeIds.length > 0) {
-                              if (highlightedNodeIds.includes(node.id)) {
-                                return '#f59e0b';
-                              }
-                              if (secondDegreeNodes.has(node.id)) {
-                                return 'rgba(156, 163, 175, 0.6)';
-                              }
+                              if (highlightedNodeIds.includes(node.id)) return '#f59e0b';
+                              if (secondDegreeNodes.has(node.id)) return 'rgba(156, 163, 175, 0.6)';
                               const isFirstDegree = linksWithMetadata.some(
                                 (l) =>
                                   (l.sourceId === highlightedNodeIds[0] && l.targetId === node.id) ||
                                   (l.targetId === highlightedNodeIds[0] && l.sourceId === node.id)
                               );
-                              if (isFirstDegree) {
-                                return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
-                              }
+                              if (isFirstDegree) return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
                               return 'rgba(100, 116, 139, 0.3)';
                             }
 
-                            if (highlightedNodeIds.includes(node.id)) {
-                              return '#f59e0b';
-                            }
-                            return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
+                            return highlightedNodeIds.includes(node.id) ? '#f59e0b' : ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
                           }}
                           nodeVal={(node) => {
                             const degree = degreeMap.get(node.id) ?? 0;
                             const maxDegree = Math.max(...Array.from(degreeMap.values()));
-                            const size = 5 + (degree / (maxDegree || 1)) * 10;
-                            return size;
+                            return 5 + (degree / (maxDegree || 1)) * 10;
                           }}
                           nodeCanvasObject={(node, ctx) => {
                             if (highlightedNodeIds.includes(node.id) && focusMode) {
@@ -2206,20 +2350,12 @@ export default function App() {
                               (source === comparisonSelection.a || source === comparisonSelection.b) &&
                               (target === comparisonSelection.a || target === comparisonSelection.b);
 
-                            if (inPath) {
-                              return '#dc2626';
-                            }
-                            if (inComparison) {
-                              return '#7c3aed';
-                            }
+                            if (inPath) return '#dc2626';
+                            if (inComparison) return '#7c3aed';
 
                             if (focusMode && highlightedNodeIds.length > 0) {
-                              const isHighlighted =
-                                highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target);
-                              if (isHighlighted) {
-                                return '#0d9488';
-                              }
-                              return 'rgba(148, 163, 184, 0.2)';
+                              const isHighlighted = highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target);
+                              return isHighlighted ? '#0d9488' : 'rgba(148, 163, 184, 0.2)';
                             }
 
                             return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target)
@@ -2229,9 +2365,7 @@ export default function App() {
                           linkWidth={(link) => {
                             const source = getLinkNodeId(link.source);
                             const target = getLinkNodeId(link.target);
-                            if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
-                              return 3.2;
-                            }
+                            if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) return 3.2;
                             if (
                               (source === comparisonSelection.a || source === comparisonSelection.b) &&
                               (target === comparisonSelection.a || target === comparisonSelection.b)
@@ -2243,10 +2377,11 @@ export default function App() {
                           linkDirectionalParticles={(link) => {
                             const source = getLinkNodeId(link.source);
                             const target = getLinkNodeId(link.target);
-                            if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
-                              return 4;
-                            }
-                            return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2 : 0;
+                            return highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)
+                              ? 4
+                              : highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target)
+                                ? 2
+                                : 0;
                           }}
                           linkDirectionalParticleWidth={2}
                           cooldownTicks={physicsEnabled ? 100 : 0}
@@ -2263,38 +2398,6 @@ export default function App() {
                         : 'Ask a question to highlight related entities'}
                     </div>
 
-                    <div className="absolute right-3 top-3 z-20 hidden w-56 md:block">
-                      <GraphControlsPanel
-                        physicsEnabled={physicsEnabled}
-                        setPhysicsEnabled={setPhysicsEnabled}
-                        labelsAlwaysVisible={labelsAlwaysVisible}
-                        setLabelsAlwaysVisible={setLabelsAlwaysVisible}
-                        edgeLabelsVisible={edgeLabelsVisible}
-                        setEdgeLabelsVisible={setEdgeLabelsVisible}
-                        nodeDraggingLocked={nodeDraggingLocked}
-                        setNodeDraggingLocked={setNodeDraggingLocked}
-                        graphRef={graphRef}
-                      />
-                    </div>
-
-                    {isMobileView && showMobileControls && (
-                      <div className="absolute inset-x-3 top-12 z-30 md:hidden">
-                        <GraphControlsPanel
-                          physicsEnabled={physicsEnabled}
-                          setPhysicsEnabled={setPhysicsEnabled}
-                          labelsAlwaysVisible={labelsAlwaysVisible}
-                          setLabelsAlwaysVisible={setLabelsAlwaysVisible}
-                          edgeLabelsVisible={edgeLabelsVisible}
-                          setEdgeLabelsVisible={setEdgeLabelsVisible}
-                          nodeDraggingLocked={nodeDraggingLocked}
-                          setNodeDraggingLocked={setNodeDraggingLocked}
-                          graphRef={graphRef}
-                          showCloseButton
-                          onClose={() => setShowMobileControls(false)}
-                        />
-                      </div>
-                    )}
-
                     <button
                       onClick={() => setFocusMode(!focusMode)}
                       title={focusMode ? 'Exit focus mode' : 'Enter focus mode - click nodes to explore'}
@@ -2309,8 +2412,23 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              <div className="hidden space-y-4 md:block">
+                <GraphControlsPanel
+                  physicsEnabled={physicsEnabled}
+                  setPhysicsEnabled={setPhysicsEnabled}
+                  labelsAlwaysVisible={labelsAlwaysVisible}
+                  setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+                  edgeLabelsVisible={edgeLabelsVisible}
+                  setEdgeLabelsVisible={setEdgeLabelsVisible}
+                  nodeDraggingLocked={nodeDraggingLocked}
+                  setNodeDraggingLocked={setNodeDraggingLocked}
+                  graphRef={graphRef}
+                />
+              </div>
             </div>
-          </GlassCard>}
+          </GlassCard>
+        )}
 
           {activeTab === 'advanced' && <div className={`grid grid-cols-1 gap-5 sm:grid-cols-2 2xl:grid-cols-3 ${pageLoadComplete ? 'animate-sidebar-enter' : ''}`}>
             <GlassCard className="p-4">
@@ -2351,7 +2469,7 @@ export default function App() {
             <GlassCard className="p-4">
               <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Contradictions</h3>
               {contradictions.length === 0 ? (
-                <EmptyBlock icon={AlertCircle} title="No contradictions yet" subtitle="Detected contradictions appear here." />
+                <EmptyBlock icon={AlertCircle} title="No contradictions detected - clean contract!" subtitle="The contract currently appears consistent." />
               ) : (
                 <div className="max-h-72 space-y-2 overflow-auto pr-1">
                   {contradictions.map((c, idx) => {
@@ -2524,8 +2642,6 @@ export default function App() {
               </div>
             </GlassCard>
           </div>}
-        </div>
-        )}
 
         {activeTab === 'analytics' && (
         <>
@@ -2854,6 +2970,78 @@ export default function App() {
         )}
       </main>
 
+      {isMobileView && activeTab === 'graph' && (
+        <>
+          <button
+            onClick={() => setShowMobileControls((prev) => !prev)}
+            className="fixed bottom-24 right-4 z-[59] inline-flex h-12 w-12 items-center justify-center rounded-full bg-cyan-700 text-white shadow-xl transition hover:bg-cyan-800 md:hidden"
+            title="Toggle graph controls"
+          >
+            <SlidersHorizontal className="h-5 w-5" />
+          </button>
+          {showMobileControls && (
+            <div className="fixed inset-x-4 bottom-40 z-[59] md:hidden">
+              <GraphControlsPanel
+                physicsEnabled={physicsEnabled}
+                setPhysicsEnabled={setPhysicsEnabled}
+                labelsAlwaysVisible={labelsAlwaysVisible}
+                setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+                edgeLabelsVisible={edgeLabelsVisible}
+                setEdgeLabelsVisible={setEdgeLabelsVisible}
+                nodeDraggingLocked={nodeDraggingLocked}
+                setNodeDraggingLocked={setNodeDraggingLocked}
+                graphRef={graphRef}
+                showCloseButton
+                onClose={() => setShowMobileControls(false)}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {showGraphControls && activeTab === 'graph' && (
+        <div className="fixed inset-0 z-[64] flex items-start justify-end bg-slate-950/30 p-4 backdrop-blur-sm" onClick={() => setShowGraphControls(false)}>
+          <div className="mt-20 w-full max-w-sm" onClick={(event) => event.stopPropagation()}>
+            <GraphControlsPanel
+              physicsEnabled={physicsEnabled}
+              setPhysicsEnabled={setPhysicsEnabled}
+              labelsAlwaysVisible={labelsAlwaysVisible}
+              setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+              edgeLabelsVisible={edgeLabelsVisible}
+              setEdgeLabelsVisible={setEdgeLabelsVisible}
+              nodeDraggingLocked={nodeDraggingLocked}
+              setNodeDraggingLocked={setNodeDraggingLocked}
+              graphRef={graphRef}
+              showCloseButton
+              onClose={() => setShowGraphControls(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="fixed inset-x-0 bottom-0 z-[58] border-t border-slate-200 bg-white/95 px-3 py-2 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 md:hidden">
+        <div className="mx-auto grid max-w-7xl grid-cols-5 gap-2">
+          {MAIN_TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex flex-col items-center justify-center rounded-xl px-2 py-2 text-[10px] font-semibold transition ${
+                  active
+                    ? 'bg-cyan-700 text-white shadow-lg'
+                    : 'text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900'
+                }`}
+              >
+                <Icon className="mb-1 h-4 w-4" />
+                <span className="truncate">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {selectedEntity && (
         <div
           className="fixed inset-0 z-[65] bg-slate-950/65 p-3 backdrop-blur-sm sm:p-5"
@@ -3019,16 +3207,6 @@ export default function App() {
             </div>
           </div>
         </div>
-      )}
-
-      {isMobileView && activeTab === 'qa' && qaMobilePanel === 'graph' && (
-        <button
-          onClick={() => setShowMobileControls((prev) => !prev)}
-          className="fixed bottom-24 right-4 z-[56] inline-flex h-12 w-12 items-center justify-center rounded-full bg-cyan-700 text-white shadow-lg transition hover:bg-cyan-800 md:hidden"
-          title="Toggle graph controls"
-        >
-          <SlidersHorizontal className="h-5 w-5" />
-        </button>
       )}
 
       {showAdvancedSearch && (
