@@ -74,6 +74,13 @@ const FILTERS = [
   { label: 'Dates', value: 'Date' },
 ];
 
+const MAIN_TABS = [
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'qa', label: 'Q&A Explorer' },
+  { key: 'analytics', label: 'Analytics' },
+  { key: 'advanced', label: 'Advanced Tools' },
+];
+
 function getLinkNodeId(value) {
   if (typeof value === 'string' || typeof value === 'number') {
     return String(value);
@@ -537,12 +544,12 @@ function GraphControlsPanel({
 
 export default function App() {
   const graphRef = useRef(null);
-  const mainTouchRef = useRef(null);
   const modalTouchRef = useRef(null);
 
   const [theme, setTheme] = useState('light');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState('dashboard');
 
   const [nodes, setNodes] = useState([]);
   const [links, setLinks] = useState([]);
@@ -610,7 +617,7 @@ export default function App() {
   const [graphViewBounds, setGraphViewBounds] = useState({ minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity });
   const [graphZoomLevel, setGraphZoomLevel] = useState(1);
   const [isMobileView, setIsMobileView] = useState(false);
-  const [mobileTab, setMobileTab] = useState('graph');
+  const [qaMobilePanel, setQaMobilePanel] = useState('chat');
   const [showMobileControls, setShowMobileControls] = useState(false);
 
   // === NEW: Task 8 - Advanced Features ===
@@ -655,6 +662,13 @@ export default function App() {
       setShowMobileControls(false);
     }
   }, [isMobileView]);
+
+  useEffect(() => {
+    if (activeTab !== 'qa') {
+      setShowMobileControls(false);
+      setQaMobilePanel('chat');
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     setIsSearchDebouncing(true);
@@ -1431,39 +1445,6 @@ export default function App() {
     }
   };
 
-  const mobileTabs = ['graph', 'stats', 'export', 'search'];
-
-  const handleMainTouchStart = (event) => {
-    if (!isMobileView || !event.touches?.[0]) {
-      return;
-    }
-    const t = event.touches[0];
-    mainTouchRef.current = { x: t.clientX, y: t.clientY };
-  };
-
-  const handleMainTouchEnd = (event) => {
-    if (!isMobileView || !mainTouchRef.current || !event.changedTouches?.[0]) {
-      return;
-    }
-    const t = event.changedTouches[0];
-    const dx = t.clientX - mainTouchRef.current.x;
-    const dy = t.clientY - mainTouchRef.current.y;
-    mainTouchRef.current = null;
-    if (Math.abs(dx) < 70 || Math.abs(dy) > 50) {
-      return;
-    }
-    const index = mobileTabs.indexOf(mobileTab);
-    if (index === -1) {
-      return;
-    }
-    if (dx < 0 && index < mobileTabs.length - 1) {
-      setMobileTab(mobileTabs[index + 1]);
-    }
-    if (dx > 0 && index > 0) {
-      setMobileTab(mobileTabs[index - 1]);
-    }
-  };
-
   const handleModalTouchStart = (event) => {
     if (!event.touches?.[0]) {
       return;
@@ -1843,15 +1824,100 @@ export default function App() {
 
       <main
         className="relative mx-auto w-full max-w-7xl px-4 py-6 pb-24 sm:px-6 lg:px-8 md:pb-6"
-        onTouchStart={handleMainTouchStart}
-        onTouchEnd={handleMainTouchEnd}
       >
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-3">
-          <GlassCard className={`p-4 md:col-span-2 2xl:col-span-2 ${pageLoadComplete ? 'animate-graph-enter' : ''} ${isMobileView && mobileTab !== 'graph' && mobileTab !== 'search' ? 'hidden' : ''}`}>
+        <GlassCard className="mb-5 p-2">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            {MAIN_TABS.map((tab) => {
+              const active = activeTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                    active
+                      ? 'bg-cyan-700 text-white shadow-lg'
+                      : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </GlassCard>
+
+        {activeTab === 'dashboard' && (
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <GlassCard className="p-4 lg:col-span-2">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-lg font-bold">Quick Insights</h2>
+                <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[11px] font-semibold text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200">
+                  Live Snapshot
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Top Entities</p>
+                  <div className="space-y-2">
+                    {topConnectedEntities.slice(0, 5).map((entity) => (
+                      <button
+                        key={entity.id}
+                        onClick={() => highlightNodeInGraph(entity.id)}
+                        className="flex w-full items-center justify-between rounded-lg bg-white px-2 py-1.5 text-left text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        <span className="truncate pr-2">{entity.name}</span>
+                        <span className="text-cyan-700 dark:text-cyan-300">{entity.connections}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Recent Activity</p>
+                  <div className="space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                    {searchHistory.length === 0 && savedViews.length === 0 ? (
+                      <p>No user actions recorded yet.</p>
+                    ) : (
+                      <>
+                        {searchHistory.slice(0, 3).map((item) => (
+                          <p key={`hist-${item}`}>Search: {item}</p>
+                        ))}
+                        {savedViews.slice(0, 2).map((view) => (
+                          <p key={`view-${view.id}`}>Saved view: {view.label}</p>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-4">
+              <h2 className="mb-3 text-lg font-bold">System Health</h2>
+              <div className="space-y-2">
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+                  <p className="text-xs text-slate-500">Backend Connectivity</p>
+                  <p className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">{error ? 'Degraded' : 'Healthy'}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+                  <p className="text-xs text-slate-500">Graph Data Loaded</p>
+                  <p className="mt-1 font-semibold text-cyan-700 dark:text-cyan-300">{filteredNodes.length} nodes / {filteredLinks.length} links</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+                  <p className="text-xs text-slate-500">Contradiction Alerts</p>
+                  <p className="mt-1 font-semibold text-rose-700 dark:text-rose-300">{contradictions.length} detected</p>
+                </div>
+              </div>
+            </GlassCard>
+          </div>
+        )}
+
+        {(activeTab === 'qa' || activeTab === 'advanced') && (
+        <div className="grid grid-cols-1 gap-5">
+          {activeTab === 'qa' && <GlassCard className={`p-4 ${pageLoadComplete ? 'animate-graph-enter' : ''}`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold">Interactive Graph Explorer</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Zoom, pan, select nodes, and inspect relationship edges.</p>
+                <h2 className="text-lg font-bold">Q&A Explorer Evidence Board</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Split-screen workflow: ask questions on the left, explore linked graph evidence on the right.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -2022,263 +2088,231 @@ export default function App() {
               </div>
             )}
 
-            {/* === NEW: Chat Q&A + Graph Split Screen (Evidence Board) === */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
-              {/* Chat Interface */}
-              <div className="h-[600px]">
+            {isMobileView && (
+              <div className="mb-3 grid grid-cols-2 gap-2 md:hidden">
+                <button
+                  onClick={() => setQaMobilePanel('chat')}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                    qaMobilePanel === 'chat'
+                      ? 'bg-cyan-700 text-white'
+                      : 'border border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+                  }`}
+                >
+                  Chat
+                </button>
+                <button
+                  onClick={() => setQaMobilePanel('graph')}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                    qaMobilePanel === 'graph'
+                      ? 'bg-cyan-700 text-white'
+                      : 'border border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+                  }`}
+                >
+                  Graph
+                </button>
+              </div>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:h-[72vh]">
+              <div className={`${isMobileView && qaMobilePanel !== 'chat' ? 'hidden' : ''} h-[68vh] min-h-[460px] md:h-[620px] lg:h-full`}>
                 <ChatInterface onQuery={handleChatQuery} />
               </div>
 
-              {/* Quick Reference - Top Entities & Relations */}
-              <div className="h-[600px] rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 overflow-hidden shadow-lg">
-                <div className="h-full flex flex-col">
-                  <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-slate-800 dark:to-slate-800">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">📊 Entities & Relationships</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Chat results will highlight related items</p>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {chatHighlightedNodes.length > 0 ? (
-                      <div>
-                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">🔍 Referenced Entities ({chatHighlightedNodes.length})</p>
-                        <div className="space-y-2">
-                          {nodes
-                            .filter(n => chatHighlightedNodes.includes(n.id))
-                            .slice(0, 8)
-                            .map((node) => (
-                              <div
-                                key={node.id}
-                                className="p-2 rounded bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 cursor-pointer hover:shadow-md transition"
-                                onClick={() => {
-                                  setHighlightedNodeIds([node.id]);
-                                  setSelectedEntity(node);
-                                }}
-                              >
-                                <div className="font-medium text-sm text-gray-900 dark:text-white">{node.name}</div>
-                                <div className="text-xs text-gray-600 dark:text-gray-400">{node.type}</div>
-                              </div>
-                            ))}
-                        </div>
-                      </div>
+              <div className={`${isMobileView && qaMobilePanel !== 'graph' ? 'hidden' : ''} relative h-[68vh] min-h-[460px] rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 md:h-[620px] lg:h-full`}>
+                <div className="relative flex h-full flex-col">
+                  <div className="relative flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
+                    {loading && nodes.length === 0 ? (
+                      <SkeletonGraphArea />
+                    ) : graphData.nodes.length === 0 ? (
+                      <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
                     ) : (
-                      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                        <p className="text-sm">Ask a question in the chat to see highlighted entities here</p>
+                      <div className="h-full" onMouseMove={handleGraphMouseMove}>
+                        <MemoForceGraph2D
+                          ref={graphRef}
+                          graphData={graphData}
+                          nodeLabel={labelsAlwaysVisible || graphZoomLevel > 1.6 ? (node) => `${node.name} (${node.type})` : () => ''}
+                          linkLabel={edgeLabelsVisible || (graphZoomLevel > 2.2 && filteredLinks.length < 600) ? (link) => `${link.type}${link.reason ? `: ${link.reason}` : ''}` : () => ''}
+                          onNodeClick={onNodeClick}
+                          onLinkClick={onLinkClick}
+                          onNodeHover={onNodeHover}
+                          onLinkHover={onLinkHover}
+                          onZoomEnd={({ k }) => {
+                            setGraphZoomLevel(k ?? 1);
+                            updateGraphBounds();
+                          }}
+                          onEngineStop={updateGraphBounds}
+                          onNodeDragEnd={updateGraphBounds}
+                          nodeVisibility={isNodeVisible}
+                          linkVisibility={isLinkVisible}
+                          nodeColor={(node) => {
+                            const isComparisonNode =
+                              node.id && (node.id === comparisonSelection.a || node.id === comparisonSelection.b);
+                            const isPathNode = highlightedPathNodeIds.includes(node.id);
+
+                            if (isComparisonNode) {
+                              return '#7c3aed';
+                            }
+                            if (isPathNode) {
+                              return '#dc2626';
+                            }
+
+                            if (focusMode && highlightedNodeIds.length > 0) {
+                              if (highlightedNodeIds.includes(node.id)) {
+                                return '#f59e0b';
+                              }
+                              if (secondDegreeNodes.has(node.id)) {
+                                return 'rgba(156, 163, 175, 0.6)';
+                              }
+                              const isFirstDegree = linksWithMetadata.some(
+                                (l) =>
+                                  (l.sourceId === highlightedNodeIds[0] && l.targetId === node.id) ||
+                                  (l.targetId === highlightedNodeIds[0] && l.sourceId === node.id)
+                              );
+                              if (isFirstDegree) {
+                                return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
+                              }
+                              return 'rgba(100, 116, 139, 0.3)';
+                            }
+
+                            if (highlightedNodeIds.includes(node.id)) {
+                              return '#f59e0b';
+                            }
+                            return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
+                          }}
+                          nodeVal={(node) => {
+                            const degree = degreeMap.get(node.id) ?? 0;
+                            const maxDegree = Math.max(...Array.from(degreeMap.values()));
+                            const size = 5 + (degree / (maxDegree || 1)) * 10;
+                            return size;
+                          }}
+                          nodeCanvasObject={(node, ctx) => {
+                            if (highlightedNodeIds.includes(node.id) && focusMode) {
+                              const pulse = Math.sin(Date.now() / 200) * 0.5 + 1.5;
+                              ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
+                              ctx.beginPath();
+                              ctx.arc(node.x, node.y, node.val * pulse, 0, 2 * Math.PI);
+                              ctx.fill();
+                            }
+                            ctx.fillStyle = node.color;
+                            ctx.beginPath();
+                            ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI);
+                            ctx.fill();
+                          }}
+                          linkColor={(link) => {
+                            const source = getLinkNodeId(link.source);
+                            const target = getLinkNodeId(link.target);
+                            const inPath = highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target);
+                            const inComparison =
+                              (source === comparisonSelection.a || source === comparisonSelection.b) &&
+                              (target === comparisonSelection.a || target === comparisonSelection.b);
+
+                            if (inPath) {
+                              return '#dc2626';
+                            }
+                            if (inComparison) {
+                              return '#7c3aed';
+                            }
+
+                            if (focusMode && highlightedNodeIds.length > 0) {
+                              const isHighlighted =
+                                highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target);
+                              if (isHighlighted) {
+                                return '#0d9488';
+                              }
+                              return 'rgba(148, 163, 184, 0.2)';
+                            }
+
+                            return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target)
+                              ? '#0d9488'
+                              : '#94a3b8';
+                          }}
+                          linkWidth={(link) => {
+                            const source = getLinkNodeId(link.source);
+                            const target = getLinkNodeId(link.target);
+                            if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
+                              return 3.2;
+                            }
+                            if (
+                              (source === comparisonSelection.a || source === comparisonSelection.b) &&
+                              (target === comparisonSelection.a || target === comparisonSelection.b)
+                            ) {
+                              return 2.8;
+                            }
+                            return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2.4 : 1;
+                          }}
+                          linkDirectionalParticles={(link) => {
+                            const source = getLinkNodeId(link.source);
+                            const target = getLinkNodeId(link.target);
+                            if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
+                              return 4;
+                            }
+                            return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2 : 0;
+                          }}
+                          linkDirectionalParticleWidth={2}
+                          cooldownTicks={physicsEnabled ? 100 : 0}
+                          d3VelocityDecay={0.26}
+                          dagMode={null}
+                          enableNodeDrag={!nodeDraggingLocked}
+                        />
                       </div>
                     )}
 
-                    {/* Top Entities by Connections */}
-                    {chatHighlightedNodes.length === 0 && (
-                      <>
-                        <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
-                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">⭐ Top Entities</p>
-                          <div className="space-y-2">
-                            {nodes.slice(0, 5).map((node) => (
-                              <div key={node.id} className="text-xs p-2 rounded bg-slate-100 dark:bg-slate-800 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition">
-                                <div className="font-medium text-gray-900 dark:text-white">{node.name}</div>
-                                <div className="text-gray-600 dark:text-gray-400">{node.type}</div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </>
+                    <div className="pointer-events-none absolute left-3 top-3 z-20 max-w-[68%] rounded-lg bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-600 shadow dark:bg-slate-900/90 dark:text-slate-200">
+                      {chatHighlightedNodes.length > 0
+                        ? `Highlighted from chat: ${chatHighlightedNodes.length}`
+                        : 'Ask a question to highlight related entities'}
+                    </div>
+
+                    <div className="absolute right-3 top-3 z-20 hidden w-56 md:block">
+                      <GraphControlsPanel
+                        physicsEnabled={physicsEnabled}
+                        setPhysicsEnabled={setPhysicsEnabled}
+                        labelsAlwaysVisible={labelsAlwaysVisible}
+                        setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+                        edgeLabelsVisible={edgeLabelsVisible}
+                        setEdgeLabelsVisible={setEdgeLabelsVisible}
+                        nodeDraggingLocked={nodeDraggingLocked}
+                        setNodeDraggingLocked={setNodeDraggingLocked}
+                        graphRef={graphRef}
+                      />
+                    </div>
+
+                    {isMobileView && showMobileControls && (
+                      <div className="absolute inset-x-3 top-12 z-30 md:hidden">
+                        <GraphControlsPanel
+                          physicsEnabled={physicsEnabled}
+                          setPhysicsEnabled={setPhysicsEnabled}
+                          labelsAlwaysVisible={labelsAlwaysVisible}
+                          setLabelsAlwaysVisible={setLabelsAlwaysVisible}
+                          edgeLabelsVisible={edgeLabelsVisible}
+                          setEdgeLabelsVisible={setEdgeLabelsVisible}
+                          nodeDraggingLocked={nodeDraggingLocked}
+                          setNodeDraggingLocked={setNodeDraggingLocked}
+                          graphRef={graphRef}
+                          showCloseButton
+                          onClose={() => setShowMobileControls(false)}
+                        />
+                      </div>
                     )}
+
+                    <button
+                      onClick={() => setFocusMode(!focusMode)}
+                      title={focusMode ? 'Exit focus mode' : 'Enter focus mode - click nodes to explore'}
+                      className={`absolute bottom-3 right-3 z-20 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                        focusMode
+                          ? 'bg-cyan-700 text-white shadow-lg'
+                          : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+                      }`}
+                    >
+                      {focusMode ? '✓ Focus Mode' : 'Focus Mode'}
+                    </button>
                   </div>
                 </div>
               </div>
             </div>
+          </GlassCard>}
 
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_240px]">
-              <div className="h-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100 dark:border-slate-700 dark:from-slate-900 dark:to-slate-900/60">
-                {loading && nodes.length === 0 ? (
-                  <SkeletonGraphArea />
-                ) : graphData.nodes.length === 0 ? (
-                  <EmptyBlock icon={Link2} title="No graph data available" subtitle="Try refreshing data or changing filters." />
-                ) : (
-                  <div onMouseMove={handleGraphMouseMove}>
-                    <MemoForceGraph2D
-                    ref={graphRef}
-                    graphData={graphData}
-                    nodeLabel={labelsAlwaysVisible || graphZoomLevel > 1.6 ? (node) => `${node.name} (${node.type})` : () => ''}
-                    linkLabel={edgeLabelsVisible || (graphZoomLevel > 2.2 && filteredLinks.length < 600) ? (link) => `${link.type}${link.reason ? `: ${link.reason}` : ''}` : () => ''}
-                    onNodeClick={onNodeClick}
-                    onLinkClick={onLinkClick}
-                    onNodeHover={onNodeHover}
-                    onLinkHover={onLinkHover}
-                    onZoomEnd={({ k }) => {
-                      setGraphZoomLevel(k ?? 1);
-                      updateGraphBounds();
-                    }}
-                    onEngineStop={updateGraphBounds}
-                    onNodeDragEnd={updateGraphBounds}
-                    nodeVisibility={isNodeVisible}
-                    linkVisibility={isLinkVisible}
-                    nodeColor={(node) => {
-                      const isComparisonNode =
-                        node.id && (node.id === comparisonSelection.a || node.id === comparisonSelection.b);
-                      const isPathNode = highlightedPathNodeIds.includes(node.id);
-
-                      if (isComparisonNode) {
-                        return '#7c3aed';
-                      }
-                      if (isPathNode) {
-                        return '#dc2626';
-                      }
-
-                      // === 1B: Click-to-Focus Mode - dim other nodes ===
-                      if (focusMode && highlightedNodeIds.length > 0) {
-                        if (highlightedNodeIds.includes(node.id)) {
-                          return '#f59e0b'; // Selected node - bright amber
-                        }
-                        if (secondDegreeNodes.has(node.id)) {
-                          return 'rgba(156, 163, 175, 0.6)'; // Second degree - semi-dim
-                        }
-                        // Check if it's a first-degree connection
-                        const isFirstDegree = linksWithMetadata.some(
-                          (l) =>
-                            (l.sourceId === highlightedNodeIds[0] && l.targetId === node.id) ||
-                            (l.targetId === highlightedNodeIds[0] && l.sourceId === node.id)
-                        );
-                        if (isFirstDegree) {
-                          return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown; // First degree - full opacity
-                        }
-                        return 'rgba(100, 116, 139, 0.3)'; // Others - very dim (30% opacity)
-                      }
-
-                      // Normal mode highlighting
-                      if (highlightedNodeIds.includes(node.id)) {
-                        return '#f59e0b';
-                      }
-                      return ENTITY_COLORS[node.type] || ENTITY_COLORS.Unknown;
-                    }}
-                    // === 1E: Enhanced Node Sizing by Importance ===
-                    nodeVal={(node) => {
-                      const degree = degreeMap.get(node.id) ?? 0;
-                      const maxDegree = Math.max(...Array.from(degreeMap.values()));
-                      // Size range: 5 to 15 based on degree proportion
-                      const size = 5 + (degree / (maxDegree || 1)) * 10;
-                      return size;
-                    }}
-                    nodeCanvasObject={(node, ctx) => {
-                      // === 1B: Pulsing glow for selected node ===
-                      if (highlightedNodeIds.includes(node.id) && focusMode) {
-                        const pulse = Math.sin(Date.now() / 200) * 0.5 + 1.5;
-                        ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
-                        ctx.beginPath();
-                        ctx.arc(node.x, node.y, node.val * pulse, 0, 2 * Math.PI);
-                        ctx.fill();
-                      }
-                      // Draw the node
-                      ctx.fillStyle = node.color;
-                      ctx.beginPath();
-                      ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI);
-                      ctx.fill();
-                    }}
-                    linkColor={(link) => {
-                      const source = getLinkNodeId(link.source);
-                      const target = getLinkNodeId(link.target);
-                      const inPath = highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target);
-                      const inComparison =
-                        (source === comparisonSelection.a || source === comparisonSelection.b) &&
-                        (target === comparisonSelection.a || target === comparisonSelection.b);
-
-                      if (inPath) {
-                        return '#dc2626';
-                      }
-                      if (inComparison) {
-                        return '#7c3aed';
-                      }
-
-                      if (focusMode && highlightedNodeIds.length > 0) {
-                        const isHighlighted =
-                          highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target);
-                        if (isHighlighted) {
-                          return '#0d9488';
-                        }
-                        return 'rgba(148, 163, 184, 0.2)'; // Very dim in focus mode
-                      }
-
-                      return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target)
-                        ? '#0d9488'
-                        : '#94a3b8';
-                    }}
-                    linkWidth={(link) => {
-                      const source = getLinkNodeId(link.source);
-                      const target = getLinkNodeId(link.target);
-                      if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
-                        return 3.2;
-                      }
-                      if (
-                        (source === comparisonSelection.a || source === comparisonSelection.b) &&
-                        (target === comparisonSelection.a || target === comparisonSelection.b)
-                      ) {
-                        return 2.8;
-                      }
-                      return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2.4 : 1;
-                    }}
-                    linkDirectionalParticles={(link) => {
-                      const source = getLinkNodeId(link.source);
-                      const target = getLinkNodeId(link.target);
-                      if (highlightedPathNodeIds.includes(source) && highlightedPathNodeIds.includes(target)) {
-                        return 4;
-                      }
-                      return highlightedNodeIds.includes(source) || highlightedNodeIds.includes(target) ? 2 : 0;
-                    }}
-                    linkDirectionalParticleWidth={2}
-                    cooldownTicks={physicsEnabled ? 100 : 0}
-                    d3VelocityDecay={0.26}
-                    dagMode={null}
-                    enableNodeDrag={!nodeDraggingLocked}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="hidden xl:block">
-                <GraphControlsPanel
-                  physicsEnabled={physicsEnabled}
-                  setPhysicsEnabled={setPhysicsEnabled}
-                  labelsAlwaysVisible={labelsAlwaysVisible}
-                  setLabelsAlwaysVisible={setLabelsAlwaysVisible}
-                  edgeLabelsVisible={edgeLabelsVisible}
-                  setEdgeLabelsVisible={setEdgeLabelsVisible}
-                  nodeDraggingLocked={nodeDraggingLocked}
-                  setNodeDraggingLocked={setNodeDraggingLocked}
-                  graphRef={graphRef}
-                  className="h-[520px]"
-                />
-              </div>
-            </div>
-
-            {isMobileView && showMobileControls && (
-              <div className="mt-3 xl:hidden">
-                <GraphControlsPanel
-                  physicsEnabled={physicsEnabled}
-                  setPhysicsEnabled={setPhysicsEnabled}
-                  labelsAlwaysVisible={labelsAlwaysVisible}
-                  setLabelsAlwaysVisible={setLabelsAlwaysVisible}
-                  edgeLabelsVisible={edgeLabelsVisible}
-                  setEdgeLabelsVisible={setEdgeLabelsVisible}
-                  nodeDraggingLocked={nodeDraggingLocked}
-                  setNodeDraggingLocked={setNodeDraggingLocked}
-                  graphRef={graphRef}
-                  showCloseButton
-                  onClose={() => setShowMobileControls(false)}
-                />
-              </div>
-            )}
-            <button
-              onClick={() => setFocusMode(!focusMode)}
-              title={focusMode ? 'Exit focus mode' : 'Enter focus mode - click nodes to explore'}
-              className={`absolute bottom-4 right-4 rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                focusMode
-                  ? 'bg-cyan-700 text-white shadow-lg'
-                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-              }`}
-            >
-              {focusMode ? '✓ Focus Mode' : 'Focus Mode'}
-            </button>
-          </GlassCard>
-
-          <div className={`grid grid-cols-1 gap-5 sm:grid-cols-2 md:col-span-2 2xl:col-span-1 2xl:grid-cols-1 ${pageLoadComplete ? 'animate-sidebar-enter' : ''} ${isMobileView && mobileTab !== 'export' ? 'hidden' : ''}`}>
+          {activeTab === 'advanced' && <div className={`grid grid-cols-1 gap-5 sm:grid-cols-2 2xl:grid-cols-3 ${pageLoadComplete ? 'animate-sidebar-enter' : ''}`}>
             <GlassCard className="p-4">
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Relationship Explorer</h3>
@@ -2343,38 +2377,6 @@ export default function App() {
               )}
             </GlassCard>
 
-            <GlassCard className="p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Time Travel Playback</h3>
-                <button
-                  onClick={() => setIsPlaybackRunning((prev) => !prev)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
-                >
-                  {isPlaybackRunning ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                  {isPlaybackRunning ? 'Pause' : 'Play'}
-                </button>
-              </div>
-              <input
-                type="range"
-                min={1}
-                max={maxChunkIndex}
-                value={timeTravelChunk}
-                onChange={(e) => setTimeTravelChunk(Number(e.target.value))}
-                className="w-full"
-              />
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-300">
-                <span>Chunk {timeTravelChunk}</span>
-                <button
-                  onClick={() => {
-                    setTimeTravelChunk(1);
-                    setIsPlaybackRunning(false);
-                  }}
-                  className="font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
-                >
-                  Reset
-                </button>
-              </div>
-            </GlassCard>
 
             <GlassCard className="p-4">
               <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Comparison Mode</h3>
@@ -2460,17 +2462,6 @@ export default function App() {
             </GlassCard>
 
             <GlassCard className="p-4">
-              <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Smart Suggestions</h3>
-              <div className="space-y-2 text-xs">
-                {smartSuggestions.map((item) => (
-                  <div key={item} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
-                    <p className="flex items-start gap-1.5"><Wand2 className="mt-0.5 h-3.5 w-3.5 text-cyan-600 dark:text-cyan-300" /> {item}</p>
-                  </div>
-                ))}
-              </div>
-            </GlassCard>
-
-            <GlassCard className="p-4">
               <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Collaboration Tools</h3>
               <div className="space-y-2">
                 <select
@@ -2532,10 +2523,59 @@ export default function App() {
                 )}
               </div>
             </GlassCard>
-          </div>
+          </div>}
+        </div>
+        )}
+
+        {activeTab === 'analytics' && (
+        <>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <GlassCard className="p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Time Travel Playback</h3>
+              <button
+                onClick={() => setIsPlaybackRunning((prev) => !prev)}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+              >
+                {isPlaybackRunning ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                {isPlaybackRunning ? 'Pause' : 'Play'}
+              </button>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={maxChunkIndex}
+              value={timeTravelChunk}
+              onChange={(e) => setTimeTravelChunk(Number(e.target.value))}
+              className="w-full"
+            />
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-300">
+              <span>Chunk {timeTravelChunk}</span>
+              <button
+                onClick={() => {
+                  setTimeTravelChunk(1);
+                  setIsPlaybackRunning(false);
+                }}
+                className="font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
+              >
+                Reset
+              </button>
+            </div>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">Smart Suggestions</h3>
+            <div className="space-y-2 text-xs">
+              {smartSuggestions.map((item) => (
+                <div key={item} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                  <p className="flex items-start gap-1.5"><Wand2 className="mt-0.5 h-3.5 w-3.5 text-cyan-600 dark:text-cyan-300" /> {item}</p>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
         </div>
 
-        <div className={`mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-6 ${isMobileView && mobileTab !== 'stats' ? 'hidden' : ''}`}>
+        <div className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-6">
           <MemoChartShell title="Entity Type Distribution" className="lg:col-span-1 2xl:col-span-2">
             <LazyRender placeholder={<SkeletonChartArea />}>
               {loading && nodes.length === 0 ? (
@@ -2810,48 +2850,7 @@ export default function App() {
             </div>
           </GlassCard>
         </div>
-
-        {isMobileView && mobileTab === 'search' && (
-          <div className="mt-5">
-            <GlassCard className="p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-base font-bold">Search & Filters</h3>
-                <button
-                  onClick={openAdvancedSearch}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold dark:border-slate-700 dark:bg-slate-900"
-                >
-                  <SlidersHorizontal className="h-3.5 w-3.5" /> Advanced
-                </button>
-              </div>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search entities"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-9 py-2 text-sm outline-none ring-cyan-600 transition focus:ring-2 dark:border-slate-700 dark:bg-slate-900"
-                />
-              </div>
-              <div className="mt-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Recent</p>
-                <div className="flex flex-wrap gap-2">
-                  {searchHistory.length === 0 ? (
-                    <span className="text-xs text-slate-500">No recent searches</span>
-                  ) : (
-                    searchHistory.map((item) => (
-                      <button
-                        key={item}
-                        onClick={() => runSearchText(item)}
-                        className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold dark:border-slate-700 dark:bg-slate-900"
-                      >
-                        {item}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            </GlassCard>
-          </div>
+        </>
         )}
       </main>
 
@@ -3022,7 +3021,7 @@ export default function App() {
         </div>
       )}
 
-      {isMobileView && (
+      {isMobileView && activeTab === 'qa' && qaMobilePanel === 'graph' && (
         <button
           onClick={() => setShowMobileControls((prev) => !prev)}
           className="fixed bottom-24 right-4 z-[56] inline-flex h-12 w-12 items-center justify-center rounded-full bg-cyan-700 text-white shadow-lg transition hover:bg-cyan-800 md:hidden"
@@ -3030,35 +3029,6 @@ export default function App() {
         >
           <SlidersHorizontal className="h-5 w-5" />
         </button>
-      )}
-
-      {isMobileView && (
-        <div className="fixed bottom-0 left-0 right-0 z-[55] border-t border-slate-200 bg-white/95 px-2 py-1.5 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 md:hidden">
-          <div className="grid grid-cols-4 gap-1">
-            {[
-              { key: 'graph', label: 'Graph', icon: Link2 },
-              { key: 'stats', label: 'Stats', icon: BarChart3 },
-              { key: 'export', label: 'Export', icon: Download },
-              { key: 'search', label: 'Search', icon: Search },
-            ].map((tab) => {
-              const active = mobileTab === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => setMobileTab(tab.key)}
-                  className={`flex flex-col items-center justify-center rounded-lg px-1 py-1 text-[10px] font-semibold transition ${
-                    active
-                      ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200'
-                      : 'text-slate-500 dark:text-slate-300'
-                  }`}
-                >
-                  <tab.icon className="mb-0.5 h-4 w-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
       )}
 
       {showAdvancedSearch && (

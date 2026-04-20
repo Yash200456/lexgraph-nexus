@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Send, Loader } from 'lucide-react';
 
 export default function ChatInterface({ onQuery }) {
@@ -6,6 +6,11 @@ export default function ChatInterface({ onQuery }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, loading]);
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -77,7 +82,7 @@ export default function ChatInterface({ onQuery }) {
       </div>
 
       {/* Messages Container */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
         {messages.length === 0 && (
           <div className="text-center text-gray-500 dark:text-gray-400 mt-8">
             <p className="text-lg font-medium mb-4">Ask me anything about the contract:</p>
@@ -165,6 +170,7 @@ export default function ChatInterface({ onQuery }) {
             ⚠️ {error}
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
       {/* Input Area */}
